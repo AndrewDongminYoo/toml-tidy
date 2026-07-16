@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Sort TOML keys without changing table hierarchy"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["tomlkit>=0.15.0", "typer>=0.16,<1"]
+dependencies = ["tomlkit>=0.15.0,<0.16", "typer>=0.16,<1"]
 
 [project.scripts]
 toml-hierarchical-sort = "toml_hierarchical_sort.cli:app"
