@@ -179,3 +179,15 @@ def test_in_place_on_sorted_mixed_endings_is_noop(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert path.read_bytes() == original
+
+
+def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\r\na = 2\r\n")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    # Bytes-level assert: text-mode newline translation must not double the CR.
+    assert result.stdout_bytes == b"a = 2\r\nb = 1\r\n"

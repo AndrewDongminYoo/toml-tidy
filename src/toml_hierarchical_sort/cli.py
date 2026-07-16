@@ -82,4 +82,6 @@ def sort_file(
                 raise typer.Exit(code=2) from None
         return
 
-    typer.echo(output, nl=False)
+    # Bytes bypass text-mode newline translation: on Windows a str write would
+    # rewrite the already-restored "\r\n" endings to "\r\r\n".
+    typer.echo(output.encode("utf-8"), nl=False)
