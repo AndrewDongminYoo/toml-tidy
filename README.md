@@ -30,6 +30,8 @@ Without `--in-place`, sorted TOML is written to standard output.
 
 Both modes compare TOML's parsed logical key, not source quoting.
 
+Dotted keys such as `b.a = 2` sort with their sibling direct keys by their parsed dotted path, segment by segment, so `a` precedes `b.a`, which precedes `b.z`.
+
 For example, `[plugins.omo]` precedes `[plugins."omo-kit"]`, while the quoted spelling remains unchanged in output.
 
 ## Preservation

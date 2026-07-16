@@ -58,7 +58,7 @@ def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry
                 sorted_entries.append(entry)
                 segment = []
                 segment_kind = None
-            case Table():
+            case Table() if key is None or not key.is_dotted():
                 if segment_kind == "key":
                     sorted_entries.extend(_sort_segment(segment, order))
                     segment = []
@@ -81,7 +81,7 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
     leading_whitespace: list[BodyEntry] = []
     pending_comments: list[BodyEntry] = []
     pending_whitespace: list[BodyEntry] = []
-    groups: list[tuple[str, list[BodyEntry]]] = []
+    groups: list[tuple[tuple[str, ...], list[BodyEntry]]] = []
 
     for entry in entries:
         key, item = entry
@@ -91,7 +91,7 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
             else:
                 leading_whitespace.extend(pending_whitespace)
             pending_whitespace = []
-            groups.append((key.key, [*pending_comments, entry]))
+            groups.append((_key_path(key, item), [*pending_comments, entry]))
             pending_comments = []
             continue
 
@@ -101,13 +101,35 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
             case _:
                 pending_comments.append(entry)
 
-    sorted_groups = sorted(groups, key=lambda group: _sort_key(group[0], order))
+    sorted_groups = sorted(
+        groups,
+        key=lambda group: tuple(_sort_key(segment, order) for segment in group[0]),
+    )
     return [
         *leading_whitespace,
         *(entry for _, group in sorted_groups for entry in group),
         *pending_whitespace,
         *pending_comments,
     ]
+
+
+def _key_path(key: Key, item: Item) -> tuple[str, ...]:
+    """Return the parsed logical segments of a key, expanding dotted keys."""
+    if not key.is_dotted():
+        return (key.key,)
+
+    path = [key.key]
+    while isinstance(item, Table) and item.is_super_table():
+        children = [
+            (child_key, child_item)
+            for child_key, child_item in item.value.body
+            if child_key is not None
+        ]
+        if len(children) != 1:
+            break
+        child_key, item = children[0]
+        path.append(child_key.key)
+    return tuple(path)
 
 
 def _sort_key(key: str, order: OrderMode) -> SortKey:

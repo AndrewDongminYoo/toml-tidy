@@ -51,6 +51,41 @@ def test_sort_toml_when_array_of_tables_exists() -> None:
     assert result == "[[items]]\na = 2\nz = 1\n\n[[items]]\nx = 4\ny = 3\n"
 
 
+def test_sort_toml_when_dotted_keys_sort_with_sibling_keys() -> None:
+    source = "b.z = 1\nb.a = 2\na = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "a = 3\nb.a = 2\nb.z = 1\n"
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_dotted_key_precedes_table() -> None:
+    source = "m.x = 1\n[a]\nv = 1\n"
+
+    result = sort_toml(source)
+
+    assert result == "m.x = 1\n[a]\nv = 1\n"
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_nested_dotted_key_precedes_child_table() -> None:
+    source = "[t]\nz.x = 1\n[t.a]\nv = 1\n"
+
+    result = sort_toml(source)
+
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_dotted_key_mixes_with_direct_keys() -> None:
+    source = "[t]\nz = 1\na.b = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == "[t]\na.b = 2\nz = 1\n"
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
 def test_sort_toml_when_output_is_rendered() -> None:
     result = sort_toml("b = 1\na = 2\n")
 
