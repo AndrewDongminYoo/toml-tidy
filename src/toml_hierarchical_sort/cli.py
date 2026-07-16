@@ -30,8 +30,9 @@ def _detect_linesep(content: str) -> str:
 def _apply_linesep(content: str, linesep: str) -> str:
     """Restore a previously detected line ending, mirroring TOMLFile.write().
 
-    "mixed" input (inconsistent endings) is left as tomlkit's normalized LF
-    output rather than reconstructing the original mix.
+    "mixed" input (inconsistent endings) is passed through unchanged: the
+    caller never normalized it before parsing, so tomlkit's per-line trivia
+    already preserves each original ending.
     """
     if linesep == "\r\n":
         return _LONE_LF.sub("\r\n", content)
@@ -55,7 +56,10 @@ def sort_file(
         with path.open(encoding="utf-8", newline="") as handle:
             raw_source = handle.read()
         linesep = _detect_linesep(raw_source)
-        source = raw_source.replace("\r\n", "\n")
+        # Mixed endings: parse the raw source unchanged so tomlkit's per-line
+        # trivia keeps each line's original ending, mirroring TOMLFile's
+        # passthrough behavior instead of flattening everything to LF.
+        source = raw_source if linesep == "mixed" else raw_source.replace("\r\n", "\n")
         sorted_source = sort_toml(source, order)
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
         typer.echo(f"{path}: {error}", err=True)

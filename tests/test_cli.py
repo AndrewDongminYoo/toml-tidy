@@ -127,3 +127,31 @@ def test_check_on_sorted_crlf_file_leaves_bytes_untouched(tmp_path: Path) -> Non
 
     assert result.exit_code == 0
     assert path.read_bytes() == original
+
+
+def test_in_place_preserves_mixed_line_endings(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\r\na = 2\n")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    content = path.read_bytes()
+    # Each line keeps its own original ending after re-sorting.
+    assert content == b"a = 2\nb = 1\r\n"
+
+    recheck = runner.invoke(app, [str(path), "--check"])
+    assert recheck.exit_code == 0
+
+
+def test_in_place_on_sorted_mixed_endings_is_noop(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = b"a = 2\nb = 1\r\n"
+    _ = path.write_bytes(original)
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_bytes() == original
