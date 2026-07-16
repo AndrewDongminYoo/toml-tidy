@@ -198,6 +198,56 @@ def test_sort_toml_when_sibling_subtables_are_out_of_order() -> None:
     assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
 
 
+def test_sort_toml_when_key_segment_tail_comment_precedes_table() -> None:
+    source = "a = 1\n# about zzz\n[zzz]\nx = 1\n[aaa]\ny = 1\n"
+
+    result = sort_toml(source)
+
+    assert result == "a = 1\n[aaa]\ny = 1\n# about zzz\n[zzz]\nx = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_key_segment_tail_whitespace_stays_at_boundary() -> None:
+    source = "a = 1\n\n[zzz]\nx = 1\n[aaa]\ny = 1\n"
+
+    result = sort_toml(source)
+
+    assert result == "a = 1\n\n[aaa]\ny = 1\n[zzz]\nx = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_key_segment_tail_comment_has_trailing_blank_line() -> None:
+    source = "a = 1\n# about zzz\n\n[zzz]\nx = 1\n[aaa]\ny = 1\n"
+
+    result = sort_toml(source)
+
+    assert result == "a = 1\n[aaa]\ny = 1\n# about zzz\n\n[zzz]\nx = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_super_table_last_child_ends_with_comment() -> None:
+    source = "[a.y]\nk = 1\n[b]\nk = 2\n[a.x]\nk = 3\n# tail\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a.x]\nk = 3\n# tail\n[a.y]\nk = 1\n[b]\nk = 2\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_comment_sits_at_super_table_merge_seam() -> None:
+    source = "[a.y]\nk = 1\n[b]\nk = 2\n# above x\n[a.x]\nk = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "# above x\n[a.x]\nk = 3\n[a.y]\nk = 1\n[b]\nk = 2\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
 def test_sort_toml_when_shuffled_documents_are_resorted() -> None:
     sources = [
         "[a.y]\nk = 1\n[b]\nk = 2\n[a.x]\nk = 3\n",

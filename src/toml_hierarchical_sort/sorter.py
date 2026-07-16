@@ -66,6 +66,8 @@ def _sort_container(container: Container, order: OrderMode) -> None:
             case _:
                 continue
 
+    container.body[:] = _restore_comment_attachment(container.body)
+
 
 def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]:
     """Sort direct keys and sibling tables without crossing their boundaries."""
@@ -78,8 +80,16 @@ def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry
         match item:
             case Table() | AoT() if key is None or not key.is_dotted():
                 if segment_kind == "key":
+                    # The key segment's trailing comment run annotates the
+                    # upcoming table header; carry it into the table segment
+                    # so it travels as that table's leading-comment group.
+                    tail = len(segment)
+                    while tail and segment[tail - 1][0] is None:
+                        tail -= 1
+                    kept, carried = _split_before_first_comment(segment[tail:])
+                    segment = [*segment[:tail], *kept]
                     sorted_entries.extend(_sort_segment(segment, order))
-                    segment = []
+                    segment = carried
                 segment.append(entry)
                 segment_kind = "table"
             case _:
@@ -236,6 +246,64 @@ def _hoist_header_comments(entries: list[BodyEntry]) -> list[BodyEntry]:
     return hoisted
 
 
+def _restore_comment_attachment(entries: list[BodyEntry]) -> list[BodyEntry]:
+    """Re-nest container-level comment runs the way a reparse would attach them.
+
+    tomlkit renders a super table's implicit header as soon as a comment
+    entry sits directly in its body, so a comment left at container level by
+    hoisting or splicing would materialize an ``[a]`` line on the next pass.
+    Sinking each trivia run that follows a table into that table's deepest
+    tail, and lifting a comment run that leads a super table's body up to the
+    parent, reproduces the shape the parser builds — keeping repeated sorts
+    byte-identical.
+    """
+    result: list[BodyEntry] = []
+    target: Container | None = None
+
+    for entry in entries:
+        key, item = entry
+        if key is None and target is not None:
+            target.body.append(entry)
+            continue
+        if isinstance(item, Table) and item.is_super_table():
+            body = item.value.body
+            end = 0
+            while end < len(body) and body[end][0] is None:
+                end += 1
+            whitespace, comments = _split_before_first_comment(body[:end])
+            if comments:
+                del body[len(whitespace) : end]
+                if target is not None:
+                    target.body.extend(comments)
+                else:
+                    result.extend(comments)
+        result.append(entry)
+        match item:
+            case Table() if key is None or not key.is_dotted():
+                target = _trailing_container(item.value)
+            case AoT() if item.body:
+                target = _trailing_container(item.body[-1].value)
+            case _:
+                target = None
+    return result
+
+
+def _trailing_container(container: Container) -> Container | None:
+    """Return the deepest container a reparse would attach trailing trivia to."""
+    while container.body:
+        key, item = container.body[-1]
+        match item:
+            case Table() if key is None or not key.is_dotted():
+                container = item.value
+            case AoT():
+                if not item.body:
+                    return None
+                container = item.body[-1].value
+            case _:
+                break
+    return container
+
+
 def _pop_trailing_comment_run(container: Container) -> list[BodyEntry]:
     """Remove and return the trailing comment run of the deepest last body.
 
@@ -243,19 +311,11 @@ def _pop_trailing_comment_run(container: Container) -> list[BodyEntry]:
     whitespace before it stays at the table boundary, while whitespace
     interleaved with the comments moves along in its original order.
     """
-    while container.body:
-        _, item = container.body[-1]
-        match item:
-            case Table():
-                container = item.value
-            case AoT():
-                if not item.body:
-                    return []
-                container = item.body[-1].value
-            case _:
-                break
+    target = _trailing_container(container)
+    if target is None:
+        return []
 
-    body = container.body
+    body = target.body
     start = len(body)
     for index in range(len(body) - 1, -1, -1):
         key, item = body[index]
