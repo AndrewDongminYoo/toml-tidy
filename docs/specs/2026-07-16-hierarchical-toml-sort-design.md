@@ -10,7 +10,7 @@ The tool accepts one TOML file and supports previewing required changes or rewri
 
 It preserves parent-child table hierarchy while sorting sibling explicit table declarations at every level.
 
-It sorts only scalar and inline-table keys that belong directly to the current table.
+It sorts direct key-value entries that belong to the current table, including scalar, array, inline-table, and dotted key-values.
 
 It recursively sorts explicit child tables.
 
