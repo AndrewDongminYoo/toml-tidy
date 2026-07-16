@@ -18,10 +18,8 @@ runtimes:
 lint:
   enabled:
     - bandit@1.9.4
-    - black@26.5.1
     - checkov@3.3.8
     - git-diff-check
-    - isort@8.0.1
     - markdownlint@0.49.1
     - prettier@3.9.5
     - ruff@0.15.21
