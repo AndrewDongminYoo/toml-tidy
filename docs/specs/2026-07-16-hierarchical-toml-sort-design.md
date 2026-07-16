@@ -14,6 +14,8 @@ It sorts only scalar and inline-table keys that belong directly to the current t
 
 It recursively sorts explicit child tables.
 
+Array-of-tables declarations sort by name among sibling table declarations.
+
 It preserves array-of-tables element order and only recursively processes eligible nested tables inside each element.
 
 ## Command-Line Contract

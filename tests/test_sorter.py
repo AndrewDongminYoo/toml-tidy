@@ -51,6 +51,66 @@ def test_sort_toml_when_array_of_tables_exists() -> None:
     assert result == "[[items]]\na = 2\nz = 1\n\n[[items]]\nx = 4\ny = 3\n"
 
 
+def test_sort_toml_when_aot_sits_between_sibling_tables() -> None:
+    source = "[z]\nk = 1\n[[items]]\nk = 2\n[a]\nk = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a]\nk = 3\n[[items]]\nk = 2\n[z]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_sibling_aots_are_out_of_order() -> None:
+    source = "[[b]]\nk = 1\n[[a]]\nk = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == "[[a]]\nk = 2\n[[b]]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_multi_element_aot_keeps_element_order() -> None:
+    source = "[z]\nk = 1\n[[items]]\nk = 2\n[[items]]\nk = 3\n[a]\nk = 4\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a]\nk = 4\n[[items]]\nk = 2\n[[items]]\nk = 3\n[z]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_aot_child_table_stays_attached() -> None:
+    source = "[[items]]\nk = 1\n[items.sub]\ns = 1\n[a]\nk = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a]\nk = 2\n[[items]]\nk = 1\n[items.sub]\ns = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_comment_precedes_aot_header() -> None:
+    source = "[z]\nk = 1\n# items note\n[[items]]\nk = 2\n[a]\nk = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a]\nk = 3\n# items note\n[[items]]\nk = 2\n[z]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_comment_after_aot_precedes_table_header() -> None:
+    source = "[[b]]\nk = 1\n# a note\n[a]\nk = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == "# a note\n[a]\nk = 2\n[[b]]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
 def test_sort_toml_when_dotted_keys_sort_with_sibling_keys() -> None:
     source = "b.z = 1\nb.a = 2\na = 3\n"
 

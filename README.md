@@ -38,7 +38,9 @@ For example, `[plugins.omo]` precedes `[plugins."omo-kit"]`, while the quoted sp
 
 Direct keys and sibling explicit table declarations are sorted recursively within their parent table.
 
-Parent-child hierarchy and array-of-tables element order remain unchanged.
+Array-of-tables declarations such as `[[items]]` sort by name among their sibling tables, while the element order inside each array of tables remains unchanged.
+
+Parent-child hierarchy remains unchanged.
 
 Standalone comments move with the following key or table declaration.
 

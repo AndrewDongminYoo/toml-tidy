@@ -76,12 +76,7 @@ def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry
     for entry in entries:
         key, item = entry
         match item:
-            case AoT():
-                sorted_entries.extend(_sort_segment(segment, order))
-                sorted_entries.append(entry)
-                segment = []
-                segment_kind = None
-            case Table() if key is None or not key.is_dotted():
+            case Table() | AoT() if key is None or not key.is_dotted():
                 if segment_kind == "key":
                     sorted_entries.extend(_sort_segment(segment, order))
                     segment = []
@@ -213,15 +208,16 @@ def _split_before_first_comment(
 def _hoist_header_comments(entries: list[BodyEntry]) -> list[BodyEntry]:
     """Splice each table's trailing comment run in front of the next sibling.
 
-    A standalone comment written directly above a ``[table]`` header is parsed
-    into the tail of the previous table's body, so reordering sibling tables
-    would strand it. Hoisting it to the segment level lets it travel as the
-    next declaration's leading-comment group. The last table keeps its tail.
+    A standalone comment written directly above a ``[table]`` or ``[[aot]]``
+    header is parsed into the tail of the previous declaration's body, so
+    reordering siblings would strand it. Hoisting it to the segment level lets
+    it travel as the next declaration's leading-comment group. The last
+    declaration keeps its tail; an AoT's tail lives in its last element.
     """
     table_indexes = [
         index
         for index, (key, item) in enumerate(entries)
-        if isinstance(item, Table) and (key is None or not key.is_dotted())
+        if isinstance(item, Table | AoT) and (key is None or not key.is_dotted())
     ]
     if not table_indexes:
         return entries
@@ -229,8 +225,14 @@ def _hoist_header_comments(entries: list[BodyEntry]) -> list[BodyEntry]:
     hoisted: list[BodyEntry] = []
     for index, entry in enumerate(entries):
         hoisted.append(entry)
-        if index in table_indexes[:-1] and isinstance(entry[1], Table):
-            hoisted.extend(_pop_trailing_comment_run(entry[1].value))
+        if index in table_indexes[:-1]:
+            match entry[1]:
+                case Table() as table:
+                    hoisted.extend(_pop_trailing_comment_run(table.value))
+                case AoT() as aot if aot.body:
+                    hoisted.extend(_pop_trailing_comment_run(aot.body[-1].value))
+                case _:
+                    pass
     return hoisted
 
 
