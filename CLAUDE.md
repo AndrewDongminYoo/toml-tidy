@@ -39,7 +39,7 @@ Key invariants (documented in `docs/specs/2026-07-16-hierarchical-toml-sort-desi
 - Sort keys compare the **parsed logical key** (`Key.key`), not source spelling — `[plugins."omo-kit"]` compares as `omo-kit` but keeps its quotes in output.
 - `natural` order (default) compares digit runs numerically (`item2` < `item10`); `alpha` is case-insensitive lexical. Both append the raw key as a tiebreaker.
 - Standalone comments attach to the **following** key/table and move with it; whitespace stays after the **preceding** entry; trailing whitespace stays at the segment boundary. This attachment/hoisting logic spans `_sort_segments`, `_sort_segment`, `_hoist_header_comments`, `_pop_trailing_comment_run`, and `_restore_comment_attachment`.
-- A dotted-key table or AoT (e.g. `[a.b]`) sorts together with direct keys in the same key segment, not with sibling table declarations.
+- A dotted key-value (e.g. `a.b = 1`) parses as a `Table` entry but sorts together with direct keys in the same key segment, compared by its full dotted path; explicit `[a.b]` headers stay in the table segment.
 - Recursion descends into `Table` values and each `AoT` element, but inline-table keys are never reordered.
 - After the whole tree is sorted, `_sort_document` runs a separate `_restore_maps` pass that rebuilds each container's key-to-index map; the reorder mutates `body` directly and bypasses tomlkit's own map bookkeeping, so lookups like `document["a"]` would otherwise resolve stale indexes.
 
