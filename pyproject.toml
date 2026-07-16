@@ -3,8 +3,26 @@ name = "toml-hierarchical-sort"
 version = "0.1.0"
 description = "Sort TOML keys without changing table hierarchy"
 readme = "README.md"
-requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dongmin Yu", email = "ydm2790@gmail.com" }]
+requires-python = ">=3.12"
+keywords = ["toml", "sort", "formatter", "cli", "tomlkit", "pyproject"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Text Processing :: Markup",
+]
 dependencies = ["tomlkit>=0.15.0,<0.16", "typer>=0.16,<1"]
+
+[project.urls]
+Repository = "https://github.com/AndrewDongminYoo/toml_hierarchical_sort"
+Issues = "https://github.com/AndrewDongminYoo/toml_hierarchical_sort/issues"
 
 [project.scripts]
 toml-hierarchical-sort = "toml_hierarchical_sort.cli:app"
@@ -18,7 +36,7 @@ dev = ["basedpyright>=1.29", "pytest>=8", "ruff>=0.11"]
 
 [tool.basedpyright]
 typeCheckingMode = "all"
-pythonVersion = "3.13"
+pythonVersion = "3.12"
 pythonPlatform = "All"
 include = ["src", "tests"]
 exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
@@ -29,7 +47,7 @@ reportMissingParameterType = "error"
 reportPrivateUsage = "error"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py312"
 line-length = 88
 src = ["src", "tests"]
 
