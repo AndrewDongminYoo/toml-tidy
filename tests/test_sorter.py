@@ -86,6 +86,48 @@ def test_sort_toml_when_dotted_key_mixes_with_direct_keys() -> None:
     assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
 
 
+def test_sort_toml_when_comments_precede_table_headers() -> None:
+    source = "# about zebra\n[zebra]\nk = 1\n# about apple\n[apple]\nk = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == "# about apple\n[apple]\nk = 2\n# about zebra\n[zebra]\nk = 1\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_sorted_input_has_header_comment_and_blank_line() -> None:
+    source = "# header comment\n\na = 1\nb = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == source
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_when_commented_tables_also_need_key_sorting() -> None:
+    source = (
+        "# about zebra\n[zebra]\nb = 1\na = 2\n# about apple\n[apple]\nd = 3\nc = 4\n"
+    )
+
+    result = sort_toml(source)
+
+    assert result == (
+        "# about apple\n[apple]\nc = 4\nd = 3\n# about zebra\n[zebra]\na = 2\nb = 1\n"
+    )
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_last_table_ends_with_comment() -> None:
+    source = "[b]\nk = 1\n[a]\nk = 2\n# trailing note\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a]\nk = 2\n# trailing note\n[b]\nk = 1\n"
+    assert sort_toml(result) == result
+
+
 def test_sort_toml_when_output_is_rendered() -> None:
     result = sort_toml("b = 1\na = 2\n")
 
