@@ -26,20 +26,22 @@ uv run toml-hierarchical-sort <file>  # run the CLI
 
 Two modules under `src/toml_hierarchical_sort/`:
 
-- `cli.py` — Typer app, one command. Exit codes: `0` sorted/clean, `1` `--check` found changes needed, `2` TOML parse error. `--in-place` and `--check` are mutually exclusive; `--in-place` writes only when content changes.
+- `cli.py` — Typer app, one command. Exit codes: `0` sorted/clean, `1` `--check` found changes needed, `2` any error (TOML parse, encoding, filesystem, recursion), reported as `{path}: {message}` on stderr with no traceback. `--in-place` and `--check` are mutually exclusive; `--in-place` writes only when content changes.
 - `sorter.py` — all sorting logic. `sort_toml(source, order)` is the only public entry point.
 
 ### How sorting works (sorter.py)
 
-The sorter mutates `tomlkit`'s parsed `Container.body` directly (a list of `(Key | None, Item)` tuples), because tomlkit's public mapping API preserves insertion order and offers no reorder operation. This private-representation dependency is deliberately isolated to this one module and pinned via the `tomlkit>=0.15.0` range — regression tests guard it.
+The sorter mutates `tomlkit`'s parsed `Container.body` directly (a list of `(Key | None, Item)` tuples), because tomlkit's public mapping API preserves insertion order and offers no reorder operation. This private-representation dependency is deliberately isolated to this one module and pinned via the `tomlkit>=0.15.0,<0.16` range — regression tests guard it.
 
 Key invariants (documented in `docs/specs/2026-07-16-hierarchical-toml-sort-design.md`):
 
-- Sorting happens per **segment**: a run of direct keys, or a run of sibling explicit `Table` declarations. Segments never mix — a table run and a key run are sorted independently, and an `AoT` (array of tables) is a hard boundary that keeps its position and element order.
+- Sorting happens per **segment**: a run of direct keys, or a run of sibling explicit `Table`/`AoT` declarations. Segments never mix — a table run and a key run are sorted independently. An `AoT` (array of tables) sorts by name among its sibling tables like any other segment member; only the order of elements **within** an AoT is preserved.
 - Sort keys compare the **parsed logical key** (`Key.key`), not source spelling — `[plugins."omo-kit"]` compares as `omo-kit` but keeps its quotes in output.
 - `natural` order (default) compares digit runs numerically (`item2` < `item10`); `alpha` is case-insensitive lexical. Both append the raw key as a tiebreaker.
-- Standalone comments attach to the **following** key/table and move with it; whitespace stays after the **preceding** entry; trailing whitespace stays at the segment boundary. This attachment logic lives in `_sort_segment`.
+- Standalone comments attach to the **following** key/table and move with it; whitespace stays after the **preceding** entry; trailing whitespace stays at the segment boundary. This attachment/hoisting logic spans `_sort_segments`, `_sort_segment`, `_hoist_header_comments`, `_pop_trailing_comment_run`, and `_restore_comment_attachment`.
+- A dotted-key table or AoT (e.g. `[a.b]`) sorts together with direct keys in the same key segment, not with sibling table declarations.
 - Recursion descends into `Table` values and each `AoT` element, but inline-table keys are never reordered.
+- After the whole tree is sorted, `_sort_document` runs a separate `_restore_maps` pass that rebuilds each container's key-to-index map; the reorder mutates `body` directly and bypasses tomlkit's own map bookkeeping, so lookups like `document["a"]` would otherwise resolve stale indexes.
 
 ## Conventions
 
