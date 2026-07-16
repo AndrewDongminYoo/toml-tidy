@@ -1,18 +1,15 @@
 import tomlkit
 
-from toml_hierarchical_sort.sorter import (
-    _sort_document,  # pyright: ignore[reportPrivateUsage]
-)
-from toml_hierarchical_sort.sorter import (
-    OrderMode,
-    sort_toml,
-)
+from toml_hierarchical_sort import sorter
+from toml_hierarchical_sort.sorter import OrderMode, sort_toml
 
 
 def test_sort_document_keeps_document_key_lookup_consistent() -> None:
     document = tomlkit.parse("b = 1\na = 2\nc = 3\n")
 
-    _sort_document(document, OrderMode.NATURAL)
+    sorter._sort_document(
+        document, OrderMode.NATURAL
+    )  # pyright: ignore[reportPrivateUsage]
 
     assert document["a"] == 2
     assert document["b"] == 1
@@ -22,7 +19,9 @@ def test_sort_document_keeps_document_key_lookup_consistent() -> None:
 def test_sort_document_keeps_nested_table_key_lookup_consistent() -> None:
     document = tomlkit.parse("[table]\nb = 1\na = 2\nc = 3\n")
 
-    _sort_document(document, OrderMode.NATURAL)
+    sorter._sort_document(
+        document, OrderMode.NATURAL
+    )  # pyright: ignore[reportPrivateUsage]
 
     assert document["table"]["a"] == 2
     assert document["table"]["b"] == 1
@@ -36,7 +35,9 @@ def test_sort_document_keeps_super_table_key_lookup_consistent() -> None:
     # descendant that a per-container inline rebuild would miss.
     document = tomlkit.parse("[a.y]\nv = 1\n# mid\n[a.x]\nv = 3\n[b]\nv = 2\n")
 
-    _sort_document(document, OrderMode.NATURAL)
+    sorter._sort_document(
+        document, OrderMode.NATURAL
+    )  # pyright: ignore[reportPrivateUsage]
 
     assert document["a"]["x"]["v"] == 3
     assert document["a"]["y"]["v"] == 1
