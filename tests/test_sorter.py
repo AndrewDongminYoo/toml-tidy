@@ -92,3 +92,27 @@ def test_sort_toml_when_output_is_rendered() -> None:
     parsed = tomlkit.parse(result)
 
     assert parsed["a"] == 2
+
+
+def test_sort_toml_when_source_lacks_trailing_newline() -> None:
+    result = sort_toml("b = 1\na = 2")
+
+    assert result == "a = 2\nb = 1\n"
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse("b = 1\na = 2").unwrap()
+
+
+def test_sort_toml_when_sorted_source_lacks_trailing_newline_is_idempotent() -> None:
+    result = sort_toml("a = 1\nb = 2")
+
+    assert result == "a = 1\nb = 2\n"
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_when_table_source_lacks_trailing_newline() -> None:
+    source = "[b]\nx = 1\n[a]\ny = 2"
+
+    result = sort_toml(source)
+
+    parsed = tomlkit.parse(result)
+    assert parsed.unwrap() == tomlkit.parse(source).unwrap()
+    assert list(parsed.unwrap().keys()) == ["a", "b"]
