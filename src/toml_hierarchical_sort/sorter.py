@@ -26,8 +26,37 @@ def sort_toml(source: str, order: OrderMode = OrderMode.NATURAL) -> str:
     """Return source with direct keys sorted recursively."""
     document = tomlkit.parse(source)
     _ensure_trailing_newline(document)
-    _sort_container(document, order)
+    _sort_document(document, order)
     return tomlkit.dumps(document)
+
+
+def _sort_document(container: Container, order: OrderMode) -> None:
+    """Sort a container's tree, then restore key-to-index map consistency.
+
+    ``_sort_container`` reorders and splices bodies throughout the tree
+    (slice assignment, sibling-table merges, comment re-attachment), all of
+    which bypass tomlkit's private ``_map`` bookkeeping. A mutation made
+    while restoring one container's comment attachment can delete entries
+    from an already-visited descendant's body, so rebuilding each
+    container's map inline during the recursive sort is not safe: the
+    rebuild has to run once, after every mutation in the tree is done.
+    """
+    _sort_container(container, order)
+    _restore_maps(container)
+
+
+def _restore_maps(container: Container) -> None:
+    """Rebuild this container's map and recurse into every descendant table."""
+    _rebuild_map(container)
+    for _, item in container.body:
+        match item:
+            case Table():
+                _restore_maps(item.value)
+            case AoT():
+                for table in item.body:
+                    _restore_maps(table.value)
+            case _:
+                continue
 
 
 def _ensure_trailing_newline(container: Container) -> None:
@@ -67,6 +96,31 @@ def _sort_container(container: Container, order: OrderMode) -> None:
                 continue
 
     container.body[:] = _restore_comment_attachment(container.body)
+
+
+def _rebuild_map(container: Container) -> None:
+    """Rebuild a container's key-to-index map to match its current body.
+
+    Sorting reorders ``body`` via direct slice assignment and splicing,
+    which bypasses tomlkit's ``append``/``_raw_append`` bookkeeping that
+    keeps the private ``_map`` in sync. Left stale, key lookups on the live
+    document (e.g. ``doc['a']``) resolve through the old index and return
+    whatever entry now occupies that slot. This mirrors ``_raw_append``'s
+    map bookkeeping: a repeated key (out-of-order tables) collects a tuple
+    of every index it occupies instead of a single int.
+    """
+    new_map: dict[Key, int | tuple[int, ...]] = {}
+    for index, (key, _) in enumerate(container.body):
+        if key is None:
+            continue
+        existing = new_map.get(key)
+        if existing is None:
+            new_map[key] = index
+        elif isinstance(existing, tuple):
+            new_map[key] = (*existing, index)
+        else:
+            new_map[key] = (existing, index)
+    container._map = new_map  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
 
 
 def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]:
