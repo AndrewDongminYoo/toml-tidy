@@ -2,8 +2,8 @@ import pytest
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
-from toml_hierarchical_sort import sorter
-from toml_hierarchical_sort.sorter import OrderMode, sort_toml
+from toml_tidy import sorter
+from toml_tidy.sorter import OrderMode, sort_toml
 
 _sort_document = sorter._sort_document  # pyright: ignore[reportPrivateUsage]
 

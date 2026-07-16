@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import pytest
 from typer.testing import CliRunner
 
-from toml_hierarchical_sort.cli import app
+from toml_tidy.cli import app
 
 if TYPE_CHECKING:
     from typing import IO

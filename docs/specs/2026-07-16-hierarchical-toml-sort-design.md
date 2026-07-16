@@ -20,11 +20,11 @@ It preserves array-of-tables element order and only recursively processes eligib
 
 ## Command-Line Contract
 
-`toml-hierarchical-sort PATH` writes the sorted document to standard output.
+`toml-tidy PATH` writes the sorted document to standard output.
 
-`toml-hierarchical-sort PATH --in-place` rewrites `PATH` only when sorting changes it.
+`toml-tidy PATH --in-place` rewrites `PATH` only when sorting changes it.
 
-`toml-hierarchical-sort PATH --check` writes no file, returns zero when `PATH` is already sorted, and returns one when sorting would change it.
+`toml-tidy PATH --check` writes no file, returns zero when `PATH` is already sorted, and returns one when sorting would change it.
 
 `--order alpha` uses a case-insensitive lexical key order.
 

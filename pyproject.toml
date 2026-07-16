@@ -1,5 +1,5 @@
 [project]
-name = "toml-hierarchical-sort"
+name = "toml-tidy"
 version = "0.1.0"
 description = "Sort TOML keys without changing table hierarchy"
 readme = "README.md"
@@ -21,11 +21,11 @@ classifiers = [
 dependencies = ["tomlkit>=0.15.0,<0.16", "typer>=0.16,<1"]
 
 [project.urls]
-Repository = "https://github.com/AndrewDongminYoo/toml_hierarchical_sort"
-Issues = "https://github.com/AndrewDongminYoo/toml_hierarchical_sort/issues"
+Repository = "https://github.com/AndrewDongminYoo/toml_tidy"
+Issues = "https://github.com/AndrewDongminYoo/toml_tidy/issues"
 
 [project.scripts]
-toml-hierarchical-sort = "toml_hierarchical_sort.cli:app"
+toml-tidy = "toml_tidy.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<0.12.0"]

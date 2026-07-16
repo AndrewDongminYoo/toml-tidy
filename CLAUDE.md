@@ -17,14 +17,14 @@ uv run ruff check src tests           # lint (select = ALL)
 uv run ruff format src tests          # format
 uv run basedpyright                   # type check (typeCheckingMode = all)
 trunk check                           # full lint suite (pre-push hook runs this)
-uv run toml-hierarchical-sort <file>  # run the CLI
+uv run toml-tidy <file>  # run the CLI
 ```
 
 `pytest` runs with `filterwarnings = ["error"]` — any warning fails the test.
 
 ## Architecture
 
-Two modules under `src/toml_hierarchical_sort/`:
+Two modules under `src/toml_tidy/`:
 
 - `cli.py` — Typer app, one command. Exit codes: `0` sorted/clean, `1` `--check` found changes needed, `2` any error (TOML parse, encoding, filesystem, recursion), reported as `{path}: {message}` on stderr with no traceback. `--in-place` and `--check` are mutually exclusive; `--in-place` writes only when content changes.
 - `sorter.py` — all sorting logic. `sort_toml(source, order)` is the only public entry point.

@@ -169,7 +169,7 @@ wheels = [
 ]
 
 [[package]]
-name = "toml-hierarchical-sort"
+name = "toml-tidy"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

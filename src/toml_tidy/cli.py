@@ -7,7 +7,7 @@ from typing import Annotated, Final
 import typer
 from tomlkit.exceptions import TOMLKitError
 
-from toml_hierarchical_sort.sorter import OrderMode, sort_toml
+from toml_tidy.sorter import OrderMode, sort_toml
 
 app = typer.Typer(help="Sort TOML keys while preserving table hierarchy.")
 _MUTUALLY_EXCLUSIVE_OPTIONS: Final = "--in-place and --check cannot be used together"

@@ -1,4 +1,4 @@
-# toml-hierarchical-sort
+# toml-tidy
 
 Sort TOML keys while preserving table hierarchy and source formatting where `tomlkit` supports it.
 
@@ -11,9 +11,9 @@ uv tool install .
 ## Usage
 
 ```bash
-toml-hierarchical-sort pyproject.toml
-toml-hierarchical-sort pyproject.toml --check
-toml-hierarchical-sort pyproject.toml --in-place --order natural
+toml-tidy pyproject.toml
+toml-tidy pyproject.toml --check
+toml-tidy pyproject.toml --in-place --order natural
 ```
 
 Without `--in-place`, sorted TOML is written to standard output.
