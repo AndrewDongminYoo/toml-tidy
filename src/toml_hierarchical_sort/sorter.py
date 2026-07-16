@@ -161,7 +161,7 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
     groups = _merge_sibling_tables(groups)
     sorted_groups = sorted(
         groups,
-        key=lambda group: tuple(_sort_key(segment, order) for segment in group[0]),
+        key=lambda group: _path_sort_key(group[0], order),
     )
     return [
         *leading,
@@ -384,13 +384,25 @@ def _key_path(key: Key, item: Item) -> tuple[str, ...]:
     return tuple(path)
 
 
+def _path_sort_key(
+    path: tuple[str, ...], order: OrderMode
+) -> tuple[tuple[SortKey, ...], tuple[str, ...]]:
+    """Compare normalized segments first; raw spelling breaks full-path ties only.
+
+    Folding the raw key into each segment would let a case-only difference in
+    an early segment (``A`` vs ``a``) decide the order before later segments
+    are compared, misplacing ``A.z`` after ``a.a``.
+    """
+    return tuple(_sort_key(segment, order) for segment in path), path
+
+
 def _sort_key(key: str, order: OrderMode) -> SortKey:
     """Produce a comparable key from a TOML key's parsed logical value."""
     match order:
         case OrderMode.NATURAL:
             return _natural_key(key)
         case OrderMode.ALPHA:
-            return ((0, key.casefold()), (0, key))
+            return ((0, key.casefold()),)
 
 
 def _natural_key(key: str) -> SortKey:
@@ -403,5 +415,4 @@ def _natural_key(key: str) -> SortKey:
         else:
             parts.append((0, part.casefold()))
 
-    parts.append((0, key))
     return tuple(parts)

@@ -358,3 +358,23 @@ def test_sort_toml_when_split_aot_source_has_sorted_keys_already() -> None:
     result = sort_toml(source)
 
     assert sort_toml(result) == result
+
+
+def test_sort_toml_when_case_only_tie_spans_dotted_segments() -> None:
+    source = "[A.z]\nk = 1\n[a.a]\nk = 2\n"
+    expected = "[a.a]\nk = 2\n[A.z]\nk = 1\n"
+
+    for order in (OrderMode.NATURAL, OrderMode.ALPHA):
+        result = sort_toml(source, order)
+
+        assert result == expected
+        assert sort_toml(result, order) == result
+
+
+def test_sort_toml_when_keys_differ_only_by_case() -> None:
+    source = "a = 1\nA = 2\n"
+
+    result = sort_toml(source, OrderMode.ALPHA)
+
+    assert result == "A = 2\na = 1\n"
+    assert sort_toml(result, OrderMode.ALPHA) == result
