@@ -10,7 +10,7 @@ from tomlkit.items import AoT, Comment, Item, Key, Table, Whitespace
 
 type BodyEntry = tuple[Key | None, Item]
 type SegmentKind = Literal["key", "table"]
-type SortKey = tuple[tuple[int, int | str], ...]
+type SortKey = tuple[tuple[int, str | tuple[int, str]], ...]
 
 _NATURAL_PARTS = re.compile(r"(\d+)")
 
@@ -407,11 +407,14 @@ def _sort_key(key: str, order: OrderMode) -> SortKey:
 
 def _natural_key(key: str) -> SortKey:
     """Return case-insensitive text and numeric runs in natural comparison order."""
-    parts: list[tuple[int, int | str]] = []
+    parts: list[tuple[int, str | tuple[int, str]]] = []
 
     for part in _NATURAL_PARTS.split(key):
         if part.isdecimal():
-            parts.append((1, int(part)))
+            # (digit count, digits) compares numerically without materializing
+            # an int, which would raise past sys.get_int_max_str_digits().
+            digits = part.lstrip("0")
+            parts.append((1, (len(digits), digits)))
         else:
             parts.append((0, part.casefold()))
 

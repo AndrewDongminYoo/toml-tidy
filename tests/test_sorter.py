@@ -378,3 +378,22 @@ def test_sort_toml_when_keys_differ_only_by_case() -> None:
 
     assert result == "A = 2\na = 1\n"
     assert sort_toml(result, OrderMode.ALPHA) == result
+
+
+def test_sort_toml_when_numeric_key_exceeds_int_conversion_limit() -> None:
+    big = "9" * 5000
+    source = f"b = 1\n{big} = 2\n"
+
+    result = sort_toml(source)
+
+    assert result == f"{big} = 2\nb = 1\n"
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_when_numeric_runs_have_leading_zeros() -> None:
+    source = "item010 = 1\nitem9 = 2\nitem0 = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "item0 = 3\nitem9 = 2\nitem010 = 1\n"
+    assert sort_toml(result) == result
