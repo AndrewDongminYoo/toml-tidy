@@ -120,6 +120,7 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
             leading.extend(whitespace)
         groups.append((_key_path(key, item), [*comments, entry]))
 
+    groups = _merge_sibling_tables(groups)
     sorted_groups = sorted(
         groups,
         key=lambda group: tuple(_sort_key(segment, order) for segment in group[0]),
@@ -129,6 +130,73 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
         *(entry for _, group in sorted_groups for entry in group),
         *pending,
     ]
+
+
+def _merge_sibling_tables(
+    groups: list[tuple[tuple[str, ...], list[BodyEntry]]],
+) -> list[tuple[tuple[str, ...], list[BodyEntry]]]:
+    """Fold duplicate-key sibling table entries into a single body entry.
+
+    ``[a.y] … [b] … [a.x]`` parses as two body entries keyed ``a``. Sorting
+    them as separate entries is never idempotent: reparsing the output merges
+    them into one super table whose children then sort together, so pass 2
+    could interleave children across the pass-1 entry boundary. Merging here
+    makes pass 1 produce the shape a reparse would.
+    """
+    merged: list[tuple[tuple[str, ...], list[BodyEntry]]] = []
+    indexes: dict[str, int] = {}
+
+    for path, entries in groups:
+        key, item = entries[-1]
+        if key is None or key.is_dotted() or not isinstance(item, Table):
+            merged.append((path, entries))
+            continue
+
+        index = indexes.get(key.key)
+        if index is not None:
+            _, dest_item = merged[index][1][-1]
+            if isinstance(dest_item, Table) and (
+                dest_item.is_super_table() or item.is_super_table()
+            ):
+                if item.is_super_table():
+                    _splice_super_table(dest_item, item, entries[:-1])
+                else:
+                    # The concrete table owns the header; fold the super in.
+                    _splice_super_table(item, dest_item, merged[index][1][:-1])
+                    merged[index] = (path, entries)
+                surviving = merged[index][1]
+                merged[index] = (_key_path(key, surviving[-1][1]), surviving)
+                continue
+
+        indexes[key.key] = len(merged)
+        merged.append((path, entries))
+    return merged
+
+
+def _splice_super_table(dest: Table, src: Table, comments: list[BodyEntry]) -> None:
+    """Move src's body (with its hoisted leading comments) under dest.
+
+    Descends the shared single-child super-table chain so the splice happens
+    at the first level where the chains diverge, keeping each comment
+    directly above the concrete header it annotates. Duplicates created at a
+    deeper level are folded when that container's segment is sorted.
+    """
+    while True:
+        children = [entry for entry in src.value.body if entry[0] is not None]
+        if len(children) != 1:
+            break
+        child_key, child_item = children[0]
+        if not isinstance(child_item, Table) or not child_item.is_super_table():
+            break
+        existing = None
+        for entry_key, entry_item in dest.value.body:
+            if entry_key == child_key and isinstance(entry_item, Table):
+                existing = entry_item
+                break
+        if existing is None or not existing.is_super_table():
+            break
+        dest, src = existing, child_item
+    dest.value.body.extend([*comments, *src.value.body])
 
 
 def _split_before_first_comment(
@@ -200,10 +268,13 @@ def _pop_trailing_comment_run(container: Container) -> list[BodyEntry]:
 
 
 def _key_path(key: Key, item: Item) -> tuple[str, ...]:
-    """Return the parsed logical segments of a key, expanding dotted keys."""
-    if not key.is_dotted():
-        return (key.key,)
+    """Return a key's logical segments, expanding dotted keys and super tables.
 
+    ``[a.y]`` at root parses as a super-table entry keyed ``a``; two such
+    siblings would otherwise compare equal, keep their original order, and
+    only sort after a reparse merges them — breaking idempotence. Walking
+    single-child super tables recovers the effective header path instead.
+    """
     path = [key.key]
     while isinstance(item, Table) and item.is_super_table():
         children = [

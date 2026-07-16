@@ -128,6 +128,32 @@ def test_sort_toml_when_last_table_ends_with_comment() -> None:
     assert sort_toml(result) == result
 
 
+def test_sort_toml_when_sibling_subtables_are_out_of_order() -> None:
+    source = "[a.y]\nk = 1\n[b]\nk = 2\n[a.x]\nk = 3\n"
+
+    result = sort_toml(source)
+
+    assert result == "[a.x]\nk = 3\n[a.y]\nk = 1\n[b]\nk = 2\n"
+    assert sort_toml(result) == result
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
+def test_sort_toml_when_shuffled_documents_are_resorted() -> None:
+    sources = [
+        "[a.y]\nk = 1\n[b]\nk = 2\n[a.x]\nk = 3\n",
+        "[a.b.z]\nk = 1\n[a.b.y]\nk = 2\n[c]\nk = 3\n[a.b.x]\nk = 4\n",
+        "[t.b]\nk = 1\n[t]\nk = 2\n[t.a]\nk = 3\n",
+        "[b]\nk = 1\n[a.x]\nk = 2\n[a]\nk = 3\n",
+        "[a.x.q]\nk = 1\n[b]\nk = 2\n[a.x.p]\nk = 3\n[a.w]\nk = 4\n",
+    ]
+
+    for source in sources:
+        result = sort_toml(source)
+
+        assert sort_toml(result) == result, source
+        assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+
+
 def test_sort_toml_when_output_is_rendered() -> None:
     result = sort_toml("b = 1\na = 2\n")
 
