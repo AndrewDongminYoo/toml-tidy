@@ -38,7 +38,7 @@ The implementation parses source with `tomlkit` and serializes the same document
 
 Each sortable key is moved together with its `tomlkit` key and item objects so quoted spelling, inline comments, value formatting, and item-level trivia remain attached.
 
-Leading blank lines and standalone comments are assigned to the following sortable key and move with that key.
+Standalone comments are assigned to the following sortable key and move with that key, while blank lines between entries remain after the preceding entry.
 
 Comments directly before a table declaration move with that declaration when sibling tables are reordered.
 
