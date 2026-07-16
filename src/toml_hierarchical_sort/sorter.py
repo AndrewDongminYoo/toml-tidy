@@ -24,8 +24,9 @@ class OrderMode(StrEnum):
 
 def sort_toml(source: str, order: OrderMode = OrderMode.NATURAL) -> str:
     """Return source with direct keys sorted recursively."""
+    if source and not source.endswith("\n"):
+        source += "\n"
     document = tomlkit.parse(source)
-    _ensure_trailing_newline(document)
     _sort_document(document, order)
     return tomlkit.dumps(document)
 
@@ -57,28 +58,6 @@ def _restore_maps(container: Container) -> None:
                     _restore_maps(table.value)
             case _:
                 continue
-
-
-def _ensure_trailing_newline(container: Container) -> None:
-    """Force the deepest last body item to end with a newline.
-
-    A source without a trailing newline leaves its last item's trivia trail
-    empty. If sorting moves that item away from the end, it would otherwise
-    be glued to whatever now follows it, producing invalid TOML.
-    """
-    while container.body:
-        key, item = container.body[-1]
-        match item:
-            case Table():
-                container = item.value
-            case AoT():
-                if not item.body:
-                    return
-                container = item.body[-1].value
-            case _:
-                if key is not None and not item.trivia.trail.endswith("\n"):
-                    item.trivia.trail += "\n"
-                return
 
 
 def _sort_container(container: Container, order: OrderMode) -> None:

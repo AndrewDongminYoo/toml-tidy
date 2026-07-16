@@ -331,3 +331,30 @@ def test_sort_toml_when_table_source_lacks_trailing_newline() -> None:
     parsed = tomlkit.parse(result)
     assert parsed.unwrap() == tomlkit.parse(source).unwrap()
     assert list(parsed.unwrap().keys()) == ["a", "b"]
+
+
+def test_sort_toml_when_empty_source() -> None:
+    assert sort_toml("") == ""
+
+
+def test_sort_toml_when_split_aot_source_lacks_trailing_newline() -> None:
+    # tomlkit coalesces the two [[b]] declarations into one AoT body entry
+    # positioned at the first declaration, so the textually-last line
+    # ("a = 1") actually lives inside the AoT's last element -- a container
+    # the structural walk in `_sort_container` reaches, unlike a walk that
+    # only follows the last *structural* body entry ([z]).
+    source = "[[b]]\nk = 1\n[z]\nx = 1\n[[b]]\nz = 2\na = 1"
+
+    result = sort_toml(source)
+
+    reparsed = tomlkit.parse(result)
+    assert reparsed.unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_when_split_aot_source_has_sorted_keys_already() -> None:
+    source = "[[b]]\nk = 1\n[z]\nx = 1\n[[b]]\na = 1\nz = 2"
+
+    result = sort_toml(source)
+
+    assert sort_toml(result) == result
