@@ -1,8 +1,15 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import pytest
 from typer.testing import CliRunner
 
 from toml_hierarchical_sort.cli import app
+
+if TYPE_CHECKING:
+    from typing import IO
+
+    from _typeshed import OpenTextMode
 
 _INVALID_UTF8 = b"a = \xff\xfe\n"
 
@@ -58,8 +65,8 @@ def test_command_when_invalid_toml_does_not_mutate_file(tmp_path: Path) -> None:
 
     result = runner.invoke(app, [str(path), "--in-place"])
 
-    assert result.exit_code != 0
-    assert str(path) in result.output
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{path}: ")
     assert path.read_text(encoding="utf-8") == source
 
 
@@ -75,21 +82,38 @@ def test_non_utf8_file_exits_with_error_code(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
-def test_in_place_on_read_only_file_exits_with_error_code(tmp_path: Path) -> None:
+def test_in_place_on_unwritable_file_exits_with_error_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = tmp_path / "config.toml"
     source = "b = 1\na = 2\n"
     _ = path.write_text(source, encoding="utf-8")
-    path.chmod(0o444)
+    original_open = Path.open
+
+    def deny_write(
+        self: Path,
+        mode: "OpenTextMode" = "r",
+        *,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> "IO[str]":
+        # chmod(0o444) is bypassed by root (Docker/CI), so simulate the
+        # write failure deterministically instead.
+        if "w" in mode:
+            raise PermissionError(13, "Permission denied", str(self))
+        return original_open(
+            self, mode, encoding=encoding, errors=errors, newline=newline
+        )
+
+    monkeypatch.setattr(Path, "open", deny_write)
     runner = CliRunner()
 
-    try:
-        result = runner.invoke(app, [str(path), "--in-place"])
+    result = runner.invoke(app, [str(path), "--in-place"])
 
-        assert result.exit_code == 2
-        assert "Traceback" not in result.output
-        assert path.read_text(encoding="utf-8") == source
-    finally:
-        path.chmod(0o644)
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
 
 
 def test_deeply_nested_header_exits_with_error_code(tmp_path: Path) -> None:
