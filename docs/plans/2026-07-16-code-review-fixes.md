@@ -153,6 +153,21 @@ Fix: constrain to the tested minor range (`tomlkit>=0.15.0,<0.16`), regenerate `
 - After sorting, the same parsed document object answers key lookups correctly: parse `'b = 1\na = 2\nc = 3\n'`, run the sorter on the document, assert `doc['a'] == 2`, `doc['b'] == 1`, `doc['c'] == 3`.
 - Same assertion one level deep inside a `[table]`.
 
+## Task 9: Hoist key-segment-tail comments at the table boundary
+
+**Finding (Task 3 review, Important):** a standalone comment at the tail of a KEY segment directly before a table segment in the same body strands above the wrong table when siblings reorder.
+Repro: `sort_toml('a = 1\n# about zzz\n[zzz]\nx = 1\n[aaa]\ny = 1\n')` → `'a = 1\n# about zzz\n[aaa]\ny = 1\n[zzz]\nx = 1\n'` — `# about zzz` ends up above `[aaa]`.
+This violates the same README promise as finding #4 ("standalone comments move with the following key or table declaration"); Task 3 fixed the table-container-tail path only.
+
+**Fix direction:** apply the same split-at-first-comment hoist at the key-segment → table-segment boundary in `_sort_segments`: when a key segment's trailing trivia ends in a comment run (comments onward, pure-whitespace prefix stays), carry that run as the leading-comment group of the first entry of the following table segment before segment sorting runs.
+Reuse Task 3's helpers (`_split_before_first_comment` / the hoist machinery) rather than duplicating the run-detection logic.
+
+**Required tests (RED first):**
+
+- The repro above: `# about zzz` must sit directly above `[zzz]` after sorting, with reparse equality and idempotence.
+- A pure-whitespace key-segment tail (no comment) stays at the boundary (regression guard for the README whitespace rule).
+- A comment-then-blank-line tail splits per the Task 3 rule (comment run moves, decide blank-line placement consistently with `_pop_trailing_comment_run`).
+
 ## Task 8: Remove duplicate formatters from trunk config
 
 Two CONFIRMED config findings in `.trunk/trunk.yaml`.
