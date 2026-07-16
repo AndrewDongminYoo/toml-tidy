@@ -1,4 +1,6 @@
+import pytest
 import tomlkit
+from tomlkit.exceptions import TOMLKitError
 
 from toml_hierarchical_sort import sorter
 from toml_hierarchical_sort.sorter import OrderMode, sort_toml
@@ -397,3 +399,8 @@ def test_sort_toml_when_numeric_runs_have_leading_zeros() -> None:
 
     assert result == "item0 = 3\nitem9 = 2\nitem010 = 1\n"
     assert sort_toml(result) == result
+
+
+def test_sort_toml_when_source_ends_with_lone_carriage_return() -> None:
+    with pytest.raises(TOMLKitError):
+        _ = sort_toml("a = 1\r")

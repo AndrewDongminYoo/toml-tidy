@@ -24,7 +24,9 @@ class OrderMode(StrEnum):
 
 def sort_toml(source: str, order: OrderMode = OrderMode.NATURAL) -> str:
     """Return source with direct keys sorted recursively."""
-    if source and not source.endswith("\n"):
+    # A trailing lone "\r" is invalid TOML; appending "\n" would turn it into
+    # a valid CRLF line instead of letting the parser reject it.
+    if source and not source.endswith(("\n", "\r")):
         source += "\n"
     document = tomlkit.parse(source)
     _sort_document(document, order)
