@@ -168,6 +168,12 @@ Reuse Task 3's helpers (`_split_before_first_comment` / the hoist machinery) rat
 - A pure-whitespace key-segment tail (no comment) stays at the boundary (regression guard for the README whitespace rule).
 - A comment-then-blank-line tail splits per the Task 3 rule (comment run moves, decide blank-line placement consistently with `_pop_trailing_comment_run`).
 
+**Additional symptoms in the same mechanism (from Task 4's review — fix or explicitly justify here):**
+
+- Trailing comment inside the last child of a super table breaks idempotence: `'[a.y]\nk = 1\n[b]\nk = 2\n[a.x]\nk = 3\n# tail\n'` — pass 2 materializes a spurious `[a]` header (semantics preserved; stems from the pre-sort "last table keeps its tail" decision in `_pop_trailing_comment_run`).
+- Cosmetic `[a]` header materialization at comment merge seams: `'[a.y]\nk = 1\n[b]\nk = 2\n# above x\n[a.x]\nk = 3\n'` renders an `[a]` header not present in the input (idempotent but surprising; same rendering mechanism).
+- Also commit one regression test with a comment at a `_splice_super_table` merge seam (Task 4's most delicate uncommitted-stress case), so this task's rework cannot silently regress it.
+
 ## Task 8: Remove duplicate formatters from trunk config
 
 Two CONFIRMED config findings in `.trunk/trunk.yaml`.
