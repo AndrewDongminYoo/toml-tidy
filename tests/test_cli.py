@@ -234,6 +234,35 @@ def test_missing_file_does_not_stop_remaining_files(tmp_path: Path) -> None:
     assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
 
 
+def test_symlink_loop_during_config_lookup_does_not_stop_remaining_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    looped = tmp_path / "looped.toml"
+    _ = looped.write_text("a = 1\n", encoding="utf-8")
+    fixable = tmp_path / "fixable.toml"
+    _ = fixable.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_resolve = Path.resolve
+
+    def raise_symlink_loop(self: Path, strict: bool = False) -> Path:
+        # Python 3.12's Path.resolve() raises RuntimeError on cyclic
+        # symlinks (3.13 resolves as far as possible instead), so simulate
+        # it deterministically on every version.
+        if self.name == "looped.toml":
+            msg = f"Symlink loop from {str(self)!r}"
+            raise RuntimeError(msg)
+        return original_resolve(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", raise_symlink_loop)
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(looped), str(fixable), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{looped}: ")
+    assert "Traceback" not in result.output
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
 def test_scope_option_keys_leaves_tables_unsorted(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text("[z]\nb = 1\na = 2\n[y]\nk = 1\n", encoding="utf-8")

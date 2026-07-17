@@ -35,7 +35,13 @@ def _as_table(value: object) -> dict[str, object]:
 
 
 def _find_pyproject(target: Path) -> Path | None:
-    directory = target.resolve().parent
+    try:
+        # Python 3.12's Path.resolve() raises RuntimeError on cyclic
+        # symlinks; 3.13+ resolves as far as possible instead.
+        directory = target.resolve().parent
+    except (OSError, RuntimeError) as error:
+        message = f"{target}: {error}"
+        raise _ConfigError(message) from None
     for candidate_dir in (directory, *directory.parents):
         candidate = candidate_dir / "pyproject.toml"
         if candidate.is_file():
