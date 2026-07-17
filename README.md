@@ -35,7 +35,7 @@ toml-tidy config/*.toml --in-place --scope tables
 
 The command accepts one or more file paths and processes each one, so it works directly as a pre-commit or trunk formatter target.
 
-Without `--in-place`, sorted TOML is written to standard output.
+Without `--in-place`, sorted TOML is written to standard output; this mode takes exactly one path so separate documents never get concatenated.
 
 `--check` writes nothing and exits with status `1` when any file requires sorting.
 
@@ -64,7 +64,7 @@ first = ["project", "build-system"]
 ```yaml
 repos:
   - repo: https://github.com/AndrewDongminYoo/toml-tidy
-    rev: v0.2.0
+    rev: v0.2.0 # first tag that ships this hook; pin the latest release
     hooks:
       - id: toml-tidy
 ```

@@ -20,7 +20,7 @@ It preserves array-of-tables element order and only recursively processes eligib
 
 ## Command-Line Contract
 
-`toml-tidy PATH...` accepts one or more paths and writes each sorted document to standard output.
+`toml-tidy PATH` writes the sorted document to standard output; stdout mode takes exactly one path, and multiple paths require `--in-place` or `--check` so separate documents are never concatenated.
 
 `toml-tidy PATH... --in-place` rewrites each path only when sorting changes it.
 
