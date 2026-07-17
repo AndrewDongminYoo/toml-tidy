@@ -181,6 +181,139 @@ def test_in_place_on_sorted_mixed_endings_is_noop(tmp_path: Path) -> None:
     assert path.read_bytes() == original
 
 
+def test_in_place_accepts_multiple_paths(tmp_path: Path) -> None:
+    first = tmp_path / "a.toml"
+    _ = first.write_text("b = 1\na = 2\n", encoding="utf-8")
+    second = tmp_path / "b.toml"
+    _ = second.write_text("d = 1\nc = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(first), str(second), "--in-place"])
+
+    assert result.exit_code == 0
+    assert first.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert second.read_text(encoding="utf-8") == "c = 2\nd = 1\n"
+
+
+def test_check_multiple_paths_flags_any_unsorted_file(tmp_path: Path) -> None:
+    sorted_file = tmp_path / "a.toml"
+    _ = sorted_file.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    unsorted_file = tmp_path / "b.toml"
+    _ = unsorted_file.write_text("d = 1\nc = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(sorted_file), str(unsorted_file), "--check"])
+
+    assert result.exit_code == 1
+
+
+def test_error_in_one_file_still_processes_remaining_files(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.toml"
+    _ = broken.write_text("key = [\n", encoding="utf-8")
+    fixable = tmp_path / "fixable.toml"
+    _ = fixable.write_text("b = 1\na = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(broken), str(fixable), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{broken}: ")
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
+def test_missing_file_does_not_stop_remaining_files(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.toml"
+    fixable = tmp_path / "fixable.toml"
+    _ = fixable.write_text("b = 1\na = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(missing), str(fixable), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{missing}: ")
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
+def test_scope_option_keys_leaves_tables_unsorted(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[z]\nb = 1\na = 2\n[y]\nk = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--scope", "keys"])
+
+    assert result.exit_code == 0
+    assert result.output == "[z]\na = 2\nb = 1\n[y]\nk = 1\n"
+
+
+def test_config_order_is_read_from_pyproject(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\norder = "alpha"\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("item2 = 1\nitem10 = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == "item10 = 2\nitem2 = 1\n"
+
+
+def test_cli_order_flag_overrides_config(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\norder = "alpha"\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("item10 = 2\nitem2 = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--order", "natural"])
+
+    assert result.exit_code == 0
+    assert result.output == "item2 = 1\nitem10 = 2\n"
+
+
+def test_config_scope_is_read_from_pyproject(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\nscope = "tables"\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--check"])
+
+    assert result.exit_code == 0
+
+
+def test_config_first_pins_top_level_tables(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\nfirst = ["project"]\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[b]\n[project]\n[a]\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == "[project]\n[a]\n[b]\n"
+
+
+def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_text('[tool.toml-tidy]\norder = "bogus"\n', encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "Traceback" not in result.output
+
+
 def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_bytes(b"b = 1\r\na = 2\r\n")
