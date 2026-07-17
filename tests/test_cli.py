@@ -356,6 +356,20 @@ def test_multiple_paths_to_stdout_is_a_usage_error(tmp_path: Path) -> None:
     assert "--in-place or --check" in result.stderr
 
 
+def test_invalid_utf8_config_exits_with_error(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_bytes(b"[tool]\n" + _INVALID_UTF8)
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "Traceback" not in result.output
+
+
 def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     _ = pyproject.write_text('[tool.toml-tidy]\norder = "bogus"\n', encoding="utf-8")
