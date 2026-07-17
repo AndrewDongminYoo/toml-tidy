@@ -452,3 +452,15 @@ def test_first_does_not_pin_nested_tables() -> None:
     result = sort_toml(source, first=("project",))
 
     assert result == "[z]\n[z.a]\nk = 1\n[z.project]\nm = 1\n"
+
+
+def test_scope_keys_split_aot_matches_tomlkit_roundtrip() -> None:
+    # tomlkit itself coalesces split AoT declarations at parse time
+    # (dumps(parse(src)) != src), so the scope-skipped path preserves
+    # tomlkit's round-trip form, not the raw source bytes.
+    source = "[[a]]\nx = 1\n[b]\ny = 1\n[[a]]\nz = 1\n"
+
+    result = sort_toml(source, scope=Scope.KEYS)
+
+    assert result == tomlkit.dumps(tomlkit.parse(source))
+    assert sort_toml(result, scope=Scope.KEYS) == result
