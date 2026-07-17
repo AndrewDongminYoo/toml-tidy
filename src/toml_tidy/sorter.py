@@ -22,18 +22,41 @@ class OrderMode(StrEnum):
     ALPHA = "alpha"
 
 
-def sort_toml(source: str, order: OrderMode = OrderMode.NATURAL) -> str:
-    """Return source with direct keys sorted recursively."""
+class Scope(StrEnum):
+    """Which segment kinds get sorted."""
+
+    ALL = "all"
+    TABLES = "tables"
+    KEYS = "keys"
+
+
+def sort_toml(
+    source: str,
+    order: OrderMode = OrderMode.NATURAL,
+    scope: Scope = Scope.ALL,
+    first: tuple[str, ...] = (),
+) -> str:
+    """Return source with direct keys sorted recursively.
+
+    ``first`` pins top-level entries whose leading key segment matches a
+    listed name, in listed order, ahead of their sorted siblings; it never
+    applies inside nested tables.
+    """
     # A trailing lone "\r" is invalid TOML; appending "\n" would turn it into
     # a valid CRLF line instead of letting the parser reject it.
     if source and not source.endswith(("\n", "\r")):
         source += "\n"
     document = tomlkit.parse(source)
-    _sort_document(document, order)
+    _sort_document(document, order, scope, first)
     return tomlkit.dumps(document)
 
 
-def _sort_document(container: Container, order: OrderMode) -> None:
+def _sort_document(
+    container: Container,
+    order: OrderMode,
+    scope: Scope = Scope.ALL,
+    first: tuple[str, ...] = (),
+) -> None:
     """Sort a container's tree, then restore key-to-index map consistency.
 
     ``_sort_container`` reorders and splices bodies throughout the tree
@@ -44,7 +67,7 @@ def _sort_document(container: Container, order: OrderMode) -> None:
     container's map inline during the recursive sort is not safe: the
     rebuild has to run once, after every mutation in the tree is done.
     """
-    _sort_container(container, order)
+    _sort_container(container, order, scope, first)
     _restore_maps(container)
 
 
@@ -62,17 +85,22 @@ def _restore_maps(container: Container) -> None:
                 continue
 
 
-def _sort_container(container: Container, order: OrderMode) -> None:
+def _sort_container(
+    container: Container,
+    order: OrderMode,
+    scope: Scope,
+    first: tuple[str, ...],
+) -> None:
     """Sort direct key segments and then visit descendant table containers."""
-    container.body[:] = _sort_segments(container.body, order)
+    container.body[:] = _sort_segments(container.body, order, scope, first)
 
     for _, item in container.body:
         match item:
             case Table():
-                _sort_container(item.value, order)
+                _sort_container(item.value, order, scope, ())
             case AoT():
                 for table in item.body:
-                    _sort_container(table.value, order)
+                    _sort_container(table.value, order, scope, ())
             case _:
                 continue
 
@@ -104,11 +132,22 @@ def _rebuild_map(container: Container) -> None:
     container._map = new_map  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
 
 
-def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]:
+def _sort_segments(
+    entries: list[BodyEntry],
+    order: OrderMode,
+    scope: Scope,
+    first: tuple[str, ...],
+) -> list[BodyEntry]:
     """Sort direct keys and sibling tables without crossing their boundaries."""
     sorted_entries: list[BodyEntry] = []
     segment: list[BodyEntry] = []
     segment_kind: SegmentKind | None = None
+
+    def flush(segment: list[BodyEntry], kind: SegmentKind | None) -> list[BodyEntry]:
+        skip = (kind == "key" and scope is Scope.TABLES) or (
+            kind == "table" and scope is Scope.KEYS
+        )
+        return segment if skip else _sort_segment(segment, order, first)
 
     for entry in entries:
         key, item = entry
@@ -123,23 +162,27 @@ def _sort_segments(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry
                         tail -= 1
                     kept, carried = _split_before_first_comment(segment[tail:])
                     segment = [*segment[:tail], *kept]
-                    sorted_entries.extend(_sort_segment(segment, order))
+                    sorted_entries.extend(flush(segment, segment_kind))
                     segment = carried
                 segment.append(entry)
                 segment_kind = "table"
             case _:
                 if key is not None and segment_kind == "table":
-                    sorted_entries.extend(_sort_segment(segment, order))
+                    sorted_entries.extend(flush(segment, segment_kind))
                     segment = []
                 segment.append(entry)
                 if key is not None:
                     segment_kind = "key"
 
-    sorted_entries.extend(_sort_segment(segment, order))
+    sorted_entries.extend(flush(segment, segment_kind))
     return sorted_entries
 
 
-def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]:
+def _sort_segment(
+    entries: list[BodyEntry],
+    order: OrderMode,
+    first: tuple[str, ...] = (),
+) -> list[BodyEntry]:
     """Move leading comments with keys while keeping whitespace after prior keys."""
     entries = _hoist_header_comments(entries)
     leading: list[BodyEntry] = []
@@ -161,9 +204,13 @@ def _sort_segment(entries: list[BodyEntry], order: OrderMode) -> list[BodyEntry]
         groups.append((_key_path(key, item), [*comments, entry]))
 
     groups = _merge_sibling_tables(groups)
+    pin_rank = {name: rank for rank, name in enumerate(first)}
     sorted_groups = sorted(
         groups,
-        key=lambda group: _path_sort_key(group[0], order),
+        key=lambda group: (
+            pin_rank.get(group[0][0], len(first)),
+            _path_sort_key(group[0], order),
+        ),
     )
     return [
         *leading,
