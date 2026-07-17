@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Multiple file paths per invocation; every file is processed and the worst exit code wins, so the CLI works directly as a pre-commit or trunk formatter target.
+- `--scope all|tables|keys` to sort only sibling table declarations (`tables`) or only direct key entries (`keys`).
+- `[tool.toml-tidy]` configuration in the nearest `pyproject.toml` (keys: `order`, `scope`, `first`); CLI flags override, invalid values exit `2`.
+- `first` configuration key pinning top-level entries ahead of their sorted siblings in listed order (e.g. keep `[project]` on top of `pyproject.toml`).
+- `.pre-commit-hooks.yaml` so the repository can be used as a pre-commit hook repo.
+
 ## [v0.1.0] — 2026-07-16
 
 Initial release.
