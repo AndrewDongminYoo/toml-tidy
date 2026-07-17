@@ -3,7 +3,7 @@ import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from toml_tidy import sorter
-from toml_tidy.sorter import OrderMode, sort_toml
+from toml_tidy.sorter import OrderMode, Scope, sort_toml
 
 _sort_document = sorter._sort_document  # pyright: ignore[reportPrivateUsage]
 
@@ -404,3 +404,63 @@ def test_sort_toml_when_numeric_runs_have_leading_zeros() -> None:
 def test_sort_toml_when_source_ends_with_lone_carriage_return() -> None:
     with pytest.raises(TOMLKitError):
         _ = sort_toml("a = 1\r")
+
+
+def test_scope_tables_sorts_tables_but_not_keys() -> None:
+    source = "b = 1\na = 2\n\n[z]\nx = 2\nw = 1\n\n[y]\nk = 1\n"
+
+    result = sort_toml(source, scope=Scope.TABLES)
+
+    assert result == "b = 1\na = 2\n\n[y]\nk = 1\n[z]\nx = 2\nw = 1\n\n"
+
+
+def test_scope_keys_sorts_keys_but_not_tables() -> None:
+    source = "b = 1\na = 2\n\n[z]\nx = 2\nw = 1\n\n[y]\nk = 1\n"
+
+    result = sort_toml(source, scope=Scope.KEYS)
+
+    assert result == "a = 2\nb = 1\n\n[z]\nw = 1\nx = 2\n\n[y]\nk = 1\n"
+
+
+def test_scope_tables_is_idempotent() -> None:
+    source = "b = 1\na = 2\n\n[z]\nx = 2\nw = 1\n\n[y]\nk = 1\n"
+
+    once = sort_toml(source, scope=Scope.TABLES)
+
+    assert sort_toml(once, scope=Scope.TABLES) == once
+
+
+def test_first_pins_listed_tables_before_sorted_rest() -> None:
+    source = "[b]\nn = 1\n[project]\nm = 1\n[a]\nk = 1\n"
+
+    result = sort_toml(source, first=("project",))
+
+    assert result == "[project]\nm = 1\n[a]\nk = 1\n[b]\nn = 1\n"
+
+
+def test_first_preserves_listed_order_over_sort_order() -> None:
+    source = "[a]\n[build-system]\n[project]\n"
+
+    result = sort_toml(source, first=("project", "build-system"))
+
+    assert result == "[project]\n[build-system]\n[a]\n"
+
+
+def test_first_does_not_pin_nested_tables() -> None:
+    source = "[z]\n[z.project]\nm = 1\n[z.a]\nk = 1\n"
+
+    result = sort_toml(source, first=("project",))
+
+    assert result == "[z]\n[z.a]\nk = 1\n[z.project]\nm = 1\n"
+
+
+def test_scope_keys_split_aot_matches_tomlkit_roundtrip() -> None:
+    # tomlkit itself coalesces split AoT declarations at parse time
+    # (dumps(parse(src)) != src), so the scope-skipped path preserves
+    # tomlkit's round-trip form, not the raw source bytes.
+    source = "[[a]]\nx = 1\n[b]\ny = 1\n[[a]]\nz = 1\n"
+
+    result = sort_toml(source, scope=Scope.KEYS)
+
+    assert result == tomlkit.dumps(tomlkit.parse(source))
+    assert sort_toml(result, scope=Scope.KEYS) == result

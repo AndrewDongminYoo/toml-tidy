@@ -6,7 +6,7 @@ Provide a command-line tool that alphabetically or naturally sorts keys inside e
 
 ## Scope
 
-The tool accepts one TOML file and supports previewing required changes or rewriting that file in place.
+The tool accepts one or more TOML files and supports previewing required changes or rewriting each file in place.
 
 It preserves parent-child table hierarchy while sorting sibling explicit table declarations at every level.
 
@@ -20,11 +20,13 @@ It preserves array-of-tables element order and only recursively processes eligib
 
 ## Command-Line Contract
 
-`toml-tidy PATH` writes the sorted document to standard output.
+`toml-tidy PATH` writes the sorted document to standard output; stdout mode takes exactly one path, and multiple paths require `--in-place` or `--check` so separate documents are never concatenated.
 
-`toml-tidy PATH --in-place` rewrites `PATH` only when sorting changes it.
+`toml-tidy PATH... --in-place` rewrites each path only when sorting changes it.
 
-`toml-tidy PATH --check` writes no file, returns zero when `PATH` is already sorted, and returns one when sorting would change it.
+`toml-tidy PATH... --check` writes no file, returns zero when every path is already sorted, and returns one when sorting would change any of them.
+
+With multiple paths the command processes every file and returns the worst exit code: two for any error, else one for any check difference, else zero.
 
 `--order alpha` uses a case-insensitive lexical key order.
 
@@ -33,6 +35,20 @@ It preserves array-of-tables element order and only recursively processes eligib
 Both order modes compare a key's parsed logical value, not its source spelling.
 
 For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and `omo` while retaining their original quoted or bare syntax in output.
+
+`--scope all` is the default and sorts both segment kinds; `--scope tables` sorts only sibling table declarations, and `--scope keys` sorts only direct key entries, each leaving the other segment kind in source order.
+
+## Configuration
+
+Per-file defaults come from the `[tool.toml-tidy]` table of the nearest `pyproject.toml` found walking up from each target file; the first `pyproject.toml` found wins whether or not it contains the table.
+
+Supported keys are `order`, `scope`, and `first`; CLI flags override `order` and `scope`, while `first` is configuration-only.
+
+`first` lists top-level entry names that are pinned ahead of their sorted siblings in the listed order, matched against the leading segment of the parsed key path, and never applies inside nested tables.
+
+When a segment kind is excluded by `scope`, `first` cannot move entries of that kind because the segment is not reordered at all.
+
+An unreadable configuration file or an invalid configuration value reports `{pyproject path}: {message}` on stderr and exits with code two.
 
 ## Representation Strategy
 
@@ -56,13 +72,13 @@ Invalid TOML reports the parser error with the input path and leaves the file un
 
 `--in-place` and `--check` are mutually exclusive.
 
-The command rejects directories and missing paths before parsing.
+A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.
 
 ## Tests
 
-Unit tests cover alpha and natural ordering, case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, and arrays of tables.
+Unit tests cover alpha and natural ordering, case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, arrays of tables, scope-limited sorting, and `first` pinning.
 
-CLI tests cover standard output, check-mode exit codes, in-place rewriting, and invalid TOML without mutation.
+CLI tests cover standard output, check-mode exit codes, in-place rewriting, invalid TOML without mutation, multi-path aggregation, and `[tool.toml-tidy]` configuration resolution including CLI override and invalid values.
 
 The test fixtures assert exact serialized output for preservation-sensitive cases and parse the output again to confirm valid TOML.
 

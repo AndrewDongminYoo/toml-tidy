@@ -26,8 +26,8 @@ uv run toml-tidy <file>  # run the CLI
 
 Two modules under `src/toml_tidy/`:
 
-- `cli.py` — Typer app, one command. Exit codes: `0` sorted/clean, `1` `--check` found changes needed, `2` any error (TOML parse, encoding, filesystem, recursion), reported as `{path}: {message}` on stderr with no traceback. `--in-place` and `--check` are mutually exclusive; `--in-place` writes only when content changes.
-- `sorter.py` — all sorting logic. `sort_toml(source, order)` is the only public entry point.
+- `cli.py` — Typer app, one command taking one or more paths. Exit codes: `0` sorted/clean, `1` `--check` found changes needed, `2` any error (TOML parse, encoding, filesystem, recursion, invalid config), reported as `{path}: {message}` on stderr with no traceback. With multiple paths every file is processed and the worst code wins. `--in-place` and `--check` are mutually exclusive; `--in-place` writes only when content changes. Per-file defaults come from `[tool.toml-tidy]` in the nearest `pyproject.toml` walking up from each target (keys: `order`, `scope`, `first`); `--order`/`--scope` flags override, `first` is config-only.
+- `sorter.py` — all sorting logic. `sort_toml(source, order, scope, first)` is the only public entry point.
 
 ### How sorting works (sorter.py)
 
@@ -41,6 +41,8 @@ Key invariants (documented in `docs/specs/2026-07-16-hierarchical-toml-sort-desi
 - Standalone comments attach to the **following** key/table and move with it; whitespace stays after the **preceding** entry; trailing whitespace stays at the segment boundary. This attachment/hoisting logic spans `_sort_segments`, `_sort_segment`, `_hoist_header_comments`, `_pop_trailing_comment_run`, and `_restore_comment_attachment`.
 - A dotted key-value (e.g. `a.b = 1`) parses as a `Table` entry but sorts together with direct keys in the same key segment, compared by its full dotted path; explicit `[a.b]` headers stay in the table segment.
 - Recursion descends into `Table` values and each `AoT` element, but inline-table keys are never reordered.
+- `Scope` limits which segment kinds sort: `tables` passes key segments through untouched, `keys` passes table segments through; skipped segments bypass `_sort_segment` entirely (no merge, no comment hoisting), preserving tomlkit's own parse round-trip form. That form is the fidelity floor, not raw source bytes — tomlkit itself coalesces split AoT declarations (`[[a]] … [b] … [[a]]`) at parse time.
+- `first` pins top-level entries (matched on the leading segment of the parsed key path) ahead of sorted siblings in listed order; recursion passes an empty `first` so it never applies inside nested tables.
 - After the whole tree is sorted, `_sort_document` runs a separate `_restore_maps` pass that rebuilds each container's key-to-index map; the reorder mutates `body` directly and bypasses tomlkit's own map bookkeeping, so lookups like `document["a"]` would otherwise resolve stale indexes.
 
 ## Conventions
