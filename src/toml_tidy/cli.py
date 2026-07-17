@@ -67,7 +67,12 @@ def _resolve_settings(
                 raw_section = _as_table(tomllib.load(handle).get("tool")).get(
                     "toml-tidy"
                 )
-        except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as error:
+        except (
+            tomllib.TOMLDecodeError,
+            UnicodeDecodeError,
+            OSError,
+            RecursionError,
+        ) as error:
             message = f"{pyproject}: {error}"
             raise _ConfigError(message) from None
         # A present but non-table value is a config mistake, not an absent

@@ -402,6 +402,23 @@ def test_invalid_utf8_config_exits_with_error(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_deeply_nested_config_exits_with_error(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    depth = 1500
+    _ = pyproject.write_text(
+        "meta = " + "[" * depth + "]" * depth + "\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "Traceback" not in result.output
+
+
 def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     _ = pyproject.write_text('[tool.toml-tidy]\norder = "bogus"\n', encoding="utf-8")
