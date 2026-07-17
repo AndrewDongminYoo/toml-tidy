@@ -1,0 +1,6 @@
+- id: toml-tidy
+  name: toml-tidy
+  description: Sort TOML keys while preserving table hierarchy, comments, and formatting.
+  entry: toml-tidy --in-place
+  language: python
+  types: [toml]
