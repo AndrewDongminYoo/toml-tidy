@@ -263,6 +263,38 @@ def test_symlink_loop_during_config_lookup_does_not_stop_remaining_files(
     assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
 
 
+def test_unreadable_pyproject_probe_does_not_stop_remaining_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    target = bad_dir / "target.toml"
+    _ = target.write_text("a = 1\n", encoding="utf-8")
+    good_dir = tmp_path / "good"
+    good_dir.mkdir()
+    fixable = good_dir / "fixable.toml"
+    _ = fixable.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_is_file = Path.is_file
+
+    def deny_probe(self: Path) -> bool:
+        # A pyproject.toml symlinked into an unsearchable directory makes
+        # is_file() raise PermissionError (verified on 3.12 and 3.13);
+        # chmod-based setups are bypassed by root in CI, so simulate it.
+        if self.name == "pyproject.toml" and self.parent.name == "bad":
+            raise PermissionError(13, "Permission denied", str(self))
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", deny_probe)
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(target), str(fixable), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{target}: ")
+    assert "Traceback" not in result.output
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
 def test_scope_option_keys_leaves_tables_unsorted(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text("[z]\nb = 1\na = 2\n[y]\nk = 1\n", encoding="utf-8")
