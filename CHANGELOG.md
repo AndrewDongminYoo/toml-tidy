@@ -4,11 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.2.0] — 2026-07-17
 
 ### Added
 
-- Multiple file paths per invocation; every file is processed and the worst exit code wins, so the CLI works directly as a pre-commit or trunk formatter target.
+- Multiple file paths per invocation; every file is processed and the worst exit code wins, so the CLI works directly as a pre-commit or trunk formatter target. Stdout mode takes exactly one path — multiple paths require `--in-place` or `--check`.
 - `--scope all|tables|keys` to sort only sibling table declarations (`tables`) or only direct key entries (`keys`).
 - `[tool.toml-tidy]` configuration in the nearest `pyproject.toml` (keys: `order`, `scope`, `first`); CLI flags override, invalid values exit `2`.
 - `first` configuration key pinning top-level entries ahead of their sorted siblings in listed order (e.g. keep `[project]` on top of `pyproject.toml`).
@@ -29,4 +29,5 @@ Initial release.
 - Robust error contract: parse, encoding, filesystem, and recursion errors report `{path}: {message}` on stderr with exit code `2` and no traceback.
 - Python 3.12+ support, MIT license.
 
+[v0.2.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/AndrewDongminYoo/toml-tidy/releases/tag/v0.1.0
