@@ -300,6 +300,33 @@ def test_config_first_pins_top_level_tables(tmp_path: Path) -> None:
     assert result.output == "[project]\n[a]\n[b]\n"
 
 
+def test_non_table_config_section_exits_with_error(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_text('[tool]\ntoml-tidy = "alpha"\n', encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "Traceback" not in result.output
+
+
+def test_multiple_paths_to_stdout_is_a_usage_error(tmp_path: Path) -> None:
+    first = tmp_path / "a.toml"
+    _ = first.write_text("a = 1\n", encoding="utf-8")
+    second = tmp_path / "b.toml"
+    _ = second.write_text("b = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(first), str(second)])
+
+    assert result.exit_code == 2
+    assert "--in-place or --check" in result.stderr
+
+
 def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     _ = pyproject.write_text('[tool.toml-tidy]\norder = "bogus"\n', encoding="utf-8")

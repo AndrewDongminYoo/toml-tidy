@@ -13,6 +13,9 @@ from toml_tidy.sorter import OrderMode, Scope, sort_toml
 
 app = typer.Typer(help="Sort TOML keys while preserving table hierarchy.")
 _MUTUALLY_EXCLUSIVE_OPTIONS: Final = "--in-place and --check cannot be used together"
+_MULTIPLE_PATHS_NEED_MODE: Final = (
+    "multiple paths require --in-place or --check; stdout output takes one path"
+)
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 
 
@@ -53,12 +56,22 @@ def _resolve_settings(
     if pyproject is not None:
         try:
             with pyproject.open("rb") as handle:
-                section = _as_table(
-                    _as_table(tomllib.load(handle).get("tool")).get("toml-tidy")
+                raw_section = _as_table(tomllib.load(handle).get("tool")).get(
+                    "toml-tidy"
                 )
         except (tomllib.TOMLDecodeError, OSError) as error:
             message = f"{pyproject}: {error}"
             raise _ConfigError(message) from None
+        # A present but non-table value is a config mistake, not an absent
+        # config — silently falling back to defaults would hide it.
+        if raw_section is not None:
+            if not isinstance(raw_section, dict):
+                message = (
+                    f"{pyproject}: [tool.toml-tidy] must be a table,"
+                    f" got {raw_section!r}"
+                )
+                raise _ConfigError(message)
+            section = cast("dict[str, object]", raw_section)
 
     if order is None:
         order_raw = section.get("order", OrderMode.NATURAL.value)
@@ -138,6 +151,10 @@ def sort_file(
     """Sort TOML keys while preserving table hierarchy."""
     if in_place and check:
         raise typer.BadParameter(_MUTUALLY_EXCLUSIVE_OPTIONS)
+    # Concatenated documents on stdout have no boundaries, so a redirect
+    # would silently merge them into one invalid TOML file.
+    if len(paths) > 1 and not (in_place or check):
+        raise typer.BadParameter(_MULTIPLE_PATHS_NEED_MODE)
 
     exit_code = 0
     for path in paths:
