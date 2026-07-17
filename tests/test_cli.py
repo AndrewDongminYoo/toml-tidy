@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,9 @@ if TYPE_CHECKING:
     from _typeshed import OpenTextMode
 
 _INVALID_UTF8 = b"a = \xff\xfe\n"
+# rich treats GitHub Actions as a color terminal, so usage errors carry ANSI
+# codes in CI but not locally; strip them before asserting on message text.
+_ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -385,7 +389,7 @@ def test_multiple_paths_to_stdout_is_a_usage_error(tmp_path: Path) -> None:
     result = runner.invoke(app, [str(first), str(second)])
 
     assert result.exit_code == 2
-    assert "--in-place or --check" in result.stderr
+    assert "--in-place or --check" in _ANSI_CODES.sub("", result.stderr)
 
 
 def test_invalid_utf8_config_exits_with_error(tmp_path: Path) -> None:
