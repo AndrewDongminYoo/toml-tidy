@@ -69,6 +69,12 @@ repos:
       - id: toml-tidy
 ```
 
+## Trunk
+
+`toml-tidy` is available as an opt-in formatter through [Trunk](https://trunk.io/).
+
+See the [official Trunk plugin definition](https://github.com/trunk-io/plugins/tree/main/linters/toml-tidy) for setup and runtime requirements.
+
 ## Ordering
 
 `natural` is the default and compares digit runs numerically, so `item2` precedes `item10`.
