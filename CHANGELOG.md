@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Blank-line normalization inserted an LF separator into a CRLF document whenever the boundary had no trivia of its own to copy an ending from: an empty table body (`sort_toml("[x]\r\n[y]\r\n", blank_lines=True)`), or a dotted key-value, whose `Table` wrapper reports a bare newline while the CRLF belongs to the value nested inside it. The ending now comes from the declaring header or from the value that actually renders. Files with uniform line endings processed through the CLI were unaffected, since it normalizes and restores them around the sort.
+
+## [v0.3.0] — 2026-07-30
+
+### Added
+
+- `--blank-lines` / `--no-blank-lines` and the `blank-lines` configuration key (off by default) to normalize blank lines after sorting: exactly one before every table and array-of-tables header — above that header's attached comment run — and none between key entries, inside comment runs, at the end of the file, or above the document's first line. Blank lines inside multi-line string values are untouched, and the result is idempotent, so `--check` reports a file clean once `--in-place` has fixed it.
+- `args: []` in `.pre-commit-hooks.yaml`, so hook consumers can set flags such as `--blank-lines` from `.pre-commit-config.yaml`; `--in-place` stays in the hook entry where an override cannot drop it.
+
 ## [v0.2.0] — 2026-07-17
 
 ### Added
@@ -29,5 +42,6 @@ Initial release.
 - Robust error contract: parse, encoding, filesystem, and recursion errors report `{path}: {message}` on stderr with exit code `2` and no traceback.
 - Python 3.12+ support, MIT license.
 
+[v0.3.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/AndrewDongminYoo/toml-tidy/releases/tag/v0.1.0

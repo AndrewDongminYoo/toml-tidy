@@ -35,19 +35,22 @@ def sort_toml(
     order: OrderMode = OrderMode.NATURAL,
     scope: Scope = Scope.ALL,
     first: tuple[str, ...] = (),
+    *,
+    blank_lines: bool = False,
 ) -> str:
     """Return source with direct keys sorted recursively.
 
     ``first`` pins top-level entries whose leading key segment matches a
     listed name, in listed order, ahead of their sorted siblings; it never
-    applies inside nested tables.
+    applies inside nested tables. ``blank_lines`` additionally normalizes
+    blank lines to exactly one before every table header and none elsewhere.
     """
     # A trailing lone "\r" is invalid TOML; appending "\n" would turn it into
     # a valid CRLF line instead of letting the parser reject it.
     if source and not source.endswith(("\n", "\r")):
         source += "\n"
     document = tomlkit.parse(source)
-    _sort_document(document, order, scope, first)
+    _sort_document(document, order, scope, first, blank_lines=blank_lines)
     return tomlkit.dumps(document)
 
 
@@ -56,6 +59,8 @@ def _sort_document(
     order: OrderMode,
     scope: Scope = Scope.ALL,
     first: tuple[str, ...] = (),
+    *,
+    blank_lines: bool = False,
 ) -> None:
     """Sort a container's tree, then restore key-to-index map consistency.
 
@@ -66,9 +71,151 @@ def _sort_document(
     from an already-visited descendant's body, so rebuilding each
     container's map inline during the recursive sort is not safe: the
     rebuild has to run once, after every mutation in the tree is done.
+    Blank-line normalization also adds and drops body entries, so it has to
+    run before that rebuild for the same reason.
     """
     _sort_container(container, order, scope, first)
+    if blank_lines:
+        _normalize_blank_lines(container, separate_first=False, followed=False)
     _restore_maps(container)
+
+
+def _normalize_blank_lines(
+    container: Container,
+    *,
+    separate_first: bool,
+    followed: bool,
+    linesep: str = "\n",
+) -> None:
+    """Rewrite trivia runs to one blank line before a table header, none elsewhere.
+
+    Each boundary's blank line has exactly one owner, so no boundary can end
+    up doubled or empty. A separator before a table header belongs to this
+    body when the preceding entry is a key here; otherwise the preceding
+    declaration's own deepest body tail supplies it -- which is where tomlkit
+    parses it, and what ``followed`` reports since the local body cannot see
+    its successors. ``separate_first`` covers the one boundary a body's first
+    entry can own: the header line this container renders directly above it. A
+    super table renders no header and the document has nothing above its first
+    line, so neither owns that boundary.
+
+    Comments keep their order and attachment; only ``Whitespace`` entries are
+    rewritten, so blank lines inside multi-line string values (parsed as part
+    of the value, not as trivia) are untouched.
+
+    ``linesep`` is the ending to write when a boundary has no trivia of its own
+    to copy: an empty table's body holds nothing, so the ending of the header
+    that declared it is the only nearby evidence.
+    """
+    body = container.body
+    last = max(
+        (index for index, (key, _) in enumerate(body) if key is not None), default=-1
+    )
+    result: list[BodyEntry] = []
+    run: list[BodyEntry] = []
+    after_declaration = False
+
+    for index, entry in enumerate(body):
+        key, item = entry
+        if key is None:
+            run.append(entry)
+            continue
+        # A dotted key parses as a Table but renders as one key line, so it
+        # separates like a key, not like a header.
+        declaration = isinstance(item, Table | AoT) and not key.is_dotted()
+        separate = (
+            declaration and not after_declaration and (bool(result) or separate_first)
+        )
+        result.extend(
+            _rebuild_run(run, separate=separate, previous=result, fallback=linesep)
+        )
+        run = []
+        result.append(entry)
+        if declaration:
+            _normalize_children(
+                item, followed=index < last or followed, linesep=linesep
+            )
+        after_declaration = declaration
+
+    result.extend(
+        _rebuild_run(
+            run,
+            separate=followed and not after_declaration,
+            previous=result,
+            fallback=linesep,
+        )
+    )
+    body[:] = result
+
+
+def _normalize_children(item: Item, *, followed: bool, linesep: str) -> None:
+    """Normalize the bodies a declaration owns, tracking rendered neighbours."""
+    match item:
+        case Table():
+            _normalize_blank_lines(
+                item.value,
+                separate_first=not item.is_super_table(),
+                followed=followed,
+                linesep=_header_linesep(item, linesep),
+            )
+        case AoT():
+            for index, table in enumerate(item.body):
+                _normalize_blank_lines(
+                    table.value,
+                    separate_first=True,
+                    followed=index < len(item.body) - 1 or followed,
+                    linesep=_header_linesep(table, linesep),
+                )
+        case _:
+            pass
+
+
+def _header_linesep(item: Item, fallback: str) -> str:
+    """Return the line ending of a declaration's own header line."""
+    trail = item.trivia.trail
+    if trail.endswith("\r\n"):
+        return "\r\n"
+    if trail.endswith("\n"):
+        return "\n"
+    return fallback
+
+
+def _rebuild_run(
+    run: list[BodyEntry], *, separate: bool, previous: list[BodyEntry], fallback: str
+) -> list[BodyEntry]:
+    """Drop a trivia run's whitespace, optionally re-adding one leading blank line."""
+    comments = [entry for entry in run if not isinstance(entry[1], Whitespace)]
+    if not separate:
+        return comments
+    return [(None, Whitespace(_run_linesep(run, previous, fallback))), *comments]
+
+
+def _run_linesep(run: list[BodyEntry], previous: list[BodyEntry], fallback: str) -> str:
+    """Reuse a neighbouring line ending so a CRLF source keeps CRLF blank lines."""
+    endings = [item.as_string() for _, item in run if isinstance(item, Whitespace)]
+    if previous:
+        endings.append(_entry_trail(previous[-1][1]))
+    if any("\r\n" in ending for ending in endings):
+        return "\r\n"
+    # An empty body offers no evidence at all; fall back to the enclosing
+    # declaration's header ending rather than assuming LF.
+    return "\n" if any(ending.endswith("\n") for ending in endings) else fallback
+
+
+def _entry_trail(item: Item) -> str:
+    """Return the trail of the last line an entry renders.
+
+    A dotted key-value parses as a ``Table`` wrapper whose own trail is a bare
+    newline, while the ending that actually renders belongs to the value nested
+    inside it -- reading the wrapper would report LF for a CRLF line.
+    """
+    if isinstance(item, Whitespace):
+        return item.as_string()
+    if isinstance(item, Table):
+        container = _trailing_container(item.value)
+        if container is not None and container.body:
+            return _entry_trail(container.body[-1][1])
+    return item.trivia.trail
 
 
 def _restore_maps(container: Container) -> None:

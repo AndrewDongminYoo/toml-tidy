@@ -464,3 +464,132 @@ def test_scope_keys_split_aot_matches_tomlkit_roundtrip() -> None:
 
     assert result == tomlkit.dumps(tomlkit.parse(source))
     assert sort_toml(result, scope=Scope.KEYS) == result
+
+
+_BLANK_LINE_SOURCE = (
+    "b = 1\n\n\na = 2\n"
+    "[y]\nq = 1\n\n\n\n# note for x\n[x]\np = 1\n"
+    "[[z]]\nr = 1\n\n\n[[z]]\nr = 2\n"
+)
+
+
+def test_blank_lines_normalizes_one_before_headers_and_none_elsewhere() -> None:
+    result = sort_toml(_BLANK_LINE_SOURCE, blank_lines=True)
+
+    assert result == (
+        "a = 2\nb = 1\n\n"
+        "# note for x\n[x]\np = 1\n\n"
+        "[y]\nq = 1\n\n"
+        "[[z]]\nr = 1\n\n"
+        "[[z]]\nr = 2\n"
+    )
+
+
+def test_blank_lines_is_idempotent() -> None:
+    result = sort_toml(_BLANK_LINE_SOURCE, blank_lines=True)
+
+    assert sort_toml(result, blank_lines=True) == result
+
+
+def test_blank_lines_is_off_by_default() -> None:
+    result = sort_toml("[y]\np = 1\n\n\n[x]\nq = 1\n")
+
+    assert result == "[x]\nq = 1\n[y]\np = 1\n\n\n"
+
+
+def test_blank_lines_separates_tables_that_had_none() -> None:
+    result = sort_toml("[x]\np = 1\n[x.b]\nq = 1\n[x.a]\nr = 1\n", blank_lines=True)
+
+    assert result == "[x]\np = 1\n\n[x.a]\nr = 1\n\n[x.b]\nq = 1\n"
+
+
+def test_blank_lines_never_indents_the_first_rendered_line() -> None:
+    # A leading blank line lives in the document body, ahead of the super
+    # table entry whose child header renders first.
+    result = sort_toml("\n[a.b]\nx = 1\n", blank_lines=True)
+
+    assert result == "[a.b]\nx = 1\n"
+
+
+def test_blank_lines_strips_trailing_blank_lines() -> None:
+    result = sort_toml("[x]\np = 1\n\n\n", blank_lines=True)
+
+    assert result == "[x]\np = 1\n"
+
+
+def test_blank_lines_leaves_multiline_string_values_untouched() -> None:
+    source = 'b = """\nline\n\n\nline\n"""\na = 1\n'
+
+    result = sort_toml(source, blank_lines=True)
+
+    assert result == 'a = 1\nb = """\nline\n\n\nline\n"""\n'
+
+
+def test_blank_lines_reuses_crlf_line_endings() -> None:
+    # Mixed-ending sources reach the sorter unnormalized, so an inserted
+    # blank line has to match the endings already in the file.
+    source = "[x]\r\np = 1\r\n[y]\r\nq = 1\r\n"
+
+    result = sort_toml(source, blank_lines=True)
+
+    assert result == "[x]\r\np = 1\r\n\r\n[y]\r\nq = 1\r\n"
+
+
+def test_blank_lines_does_not_double_before_a_super_table_sibling() -> None:
+    # The separator after [a.z] belongs to that table's tail; the super table
+    # [b] renders no header, so its first child must not add a second one.
+    source = "[a.z]\nx = 1\n[b.c]\ny = 2\n"
+
+    result = sort_toml(source, blank_lines=True)
+
+    assert result == "[a.z]\nx = 1\n\n[b.c]\ny = 2\n"
+
+
+def test_blank_lines_separates_a_super_table_that_follows_a_key() -> None:
+    source = "a = 1\n[b.c]\ny = 2\n"
+
+    result = sort_toml(source, blank_lines=True)
+
+    assert result == "a = 1\n\n[b.c]\ny = 2\n"
+
+
+def test_blank_lines_normalizes_segments_that_scope_leaves_unsorted() -> None:
+    source = "[y]\nb = 1\n\n\na = 2\n\n\n[x]\np = 1\n"
+
+    result = sort_toml(source, scope=Scope.KEYS, blank_lines=True)
+
+    assert result == "[y]\na = 2\nb = 1\n\n[x]\np = 1\n"
+
+
+def test_blank_lines_with_source_lacking_a_trailing_newline() -> None:
+    result = sort_toml("[y]\nq = 1\n\n\n[x]\np = 1", blank_lines=True)
+
+    assert result == "[x]\np = 1\n\n[y]\nq = 1\n"
+
+
+def test_blank_lines_in_a_comment_only_document() -> None:
+    result = sort_toml("# one\n\n\n# two\n", blank_lines=True)
+
+    assert result == "# one\n# two\n"
+
+
+def test_blank_lines_reuses_crlf_when_separating_empty_tables() -> None:
+    # An empty table's body holds no trivia to copy an ending from, so it has
+    # to come from the header that declared it.
+    result = sort_toml("[x]\r\n[y]\r\n", blank_lines=True)
+
+    assert result == "[x]\r\n\r\n[y]\r\n"
+
+
+def test_blank_lines_reuses_crlf_when_separating_empty_aot_elements() -> None:
+    result = sort_toml("[[z]]\r\n[[z]]\r\n", blank_lines=True)
+
+    assert result == "[[z]]\r\n\r\n[[z]]\r\n"
+
+
+def test_blank_lines_reuses_crlf_after_a_dotted_key() -> None:
+    # A dotted key-value parses as a Table wrapper whose own trail is a bare
+    # newline; the CRLF lives on the value nested inside it.
+    result = sort_toml("z.y = 1\r\n[t]\r\nq = 1\r\n", blank_lines=True)
+
+    assert result == "z.y = 1\r\n\r\n[t]\r\nq = 1\r\n"

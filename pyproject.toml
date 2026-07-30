@@ -1,6 +1,6 @@
 [project]
 name = "toml-tidy"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sort TOML keys without changing table hierarchy"
 readme = "README.md"
 license = "MIT"
@@ -69,6 +69,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# A Typer command takes one parameter per CLI flag, and each flag is threaded
+# down to the per-file worker, so both grow past the argument-count limit.
+"src/toml_tidy/cli.py" = ["PLR0913"]
 "tests/**/*.py" = ["ARG", "D", "PLR2004", "S101", "SLF001"]
 
 [tool.ruff.lint.pydocstyle]

@@ -27,6 +27,7 @@ class _Settings(NamedTuple):
     order: OrderMode
     scope: Scope
     first: tuple[str, ...]
+    blank_lines: bool
 
 
 def _as_table(value: object) -> dict[str, object]:
@@ -52,7 +53,10 @@ def _find_pyproject(target: Path) -> Path | None:
 
 
 def _resolve_settings(
-    target: Path, order: OrderMode | None, scope: Scope | None
+    target: Path,
+    order: OrderMode | None,
+    scope: Scope | None,
+    blank_lines: bool | None,
 ) -> _Settings:
     """Merge CLI flags over the nearest pyproject's ``[tool.toml-tidy]`` table.
 
@@ -92,9 +96,11 @@ def _resolve_settings(
     if scope is None:
         scope_raw = section.get("scope", Scope.ALL.value)
         scope = _parse_enum(scope_raw, Scope, "scope", pyproject)
+    if blank_lines is None:
+        blank_lines = _parse_bool(section.get("blank-lines", False), pyproject)
     first = _parse_first(section.get("first", []), pyproject)
 
-    return _Settings(order, scope, first)
+    return _Settings(order, scope, first, blank_lines)
 
 
 def _parse_enum[E: StrEnum](
@@ -109,6 +115,13 @@ def _parse_enum[E: StrEnum](
     else:
         detail = f"{key} must be a string, got {value!r}"
     message = f"{pyproject}: {detail}"
+    raise _ConfigError(message)
+
+
+def _parse_bool(value: object, pyproject: Path | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    message = f"{pyproject}: blank-lines must be a boolean, got {value!r}"
     raise _ConfigError(message)
 
 
@@ -160,6 +173,9 @@ def sort_file(
     check: Annotated[bool, typer.Option("--check")] = False,
     order: Annotated[OrderMode | None, typer.Option("--order")] = None,
     scope: Annotated[Scope | None, typer.Option("--scope")] = None,
+    blank_lines: Annotated[
+        bool | None, typer.Option("--blank-lines/--no-blank-lines")
+    ] = None,
 ) -> None:
     """Sort TOML keys while preserving table hierarchy."""
     if in_place and check:
@@ -174,7 +190,12 @@ def sort_file(
         exit_code = max(
             exit_code,
             _process_file(
-                path, in_place=in_place, check=check, order=order, scope=scope
+                path,
+                in_place=in_place,
+                check=check,
+                order=order,
+                scope=scope,
+                blank_lines=blank_lines,
             ),
         )
     if exit_code:
@@ -188,10 +209,11 @@ def _process_file(
     check: bool,
     order: OrderMode | None,
     scope: Scope | None,
+    blank_lines: bool | None,
 ) -> int:
     """Sort one file and return its exit code (0 ok, 1 check diff, 2 error)."""
     try:
-        settings = _resolve_settings(path, order, scope)
+        settings = _resolve_settings(path, order, scope, blank_lines)
     except _ConfigError as error:
         typer.echo(str(error), err=True)
         return 2
@@ -205,7 +227,11 @@ def _process_file(
         # passthrough behavior instead of flattening everything to LF.
         source = raw_source if linesep == "mixed" else raw_source.replace("\r\n", "\n")
         sorted_source = sort_toml(
-            source, settings.order, settings.scope, settings.first
+            source,
+            settings.order,
+            settings.scope,
+            settings.first,
+            blank_lines=settings.blank_lines,
         )
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
         typer.echo(f"{path}: {error}", err=True)
