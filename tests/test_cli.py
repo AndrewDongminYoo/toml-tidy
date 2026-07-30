@@ -447,3 +447,69 @@ def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:
     assert result.exit_code == 0
     # Bytes-level assert: text-mode newline translation must not double the CR.
     assert result.stdout_bytes == b"a = 2\r\nb = 1\r\n"
+
+
+def test_blank_lines_flag_normalizes_blank_lines(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[y]\nq = 1\n\n\n[x]\np = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--blank-lines"])
+
+    assert result.exit_code == 0
+    assert result.output == "[x]\np = 1\n\n[y]\nq = 1\n"
+
+
+def test_config_blank_lines_is_read_from_pyproject(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        "[tool.toml-tidy]\nblank-lines = true\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[y]\nq = 1\n\n\n[x]\np = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == "[x]\np = 1\n\n[y]\nq = 1\n"
+
+
+def test_cli_no_blank_lines_flag_overrides_config(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        "[tool.toml-tidy]\nblank-lines = true\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[y]\nq = 1\n\n\n[x]\np = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--no-blank-lines"])
+
+    assert result.exit_code == 0
+    assert result.output == "[x]\np = 1\n[y]\nq = 1\n\n\n"
+
+
+def test_check_reports_blank_line_changes(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        "[tool.toml-tidy]\nblank-lines = true\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[x]\np = 1\n\n\n[y]\nq = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--check"])
+
+    assert result.exit_code == 1
+
+
+def test_non_boolean_blank_lines_config_exits_with_error(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\nblank-lines = "yes"\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert "blank-lines must be a boolean" in result.output
