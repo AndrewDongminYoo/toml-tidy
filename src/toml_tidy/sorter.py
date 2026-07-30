@@ -81,7 +81,11 @@ def _sort_document(
 
 
 def _normalize_blank_lines(
-    container: Container, *, separate_first: bool, followed: bool
+    container: Container,
+    *,
+    separate_first: bool,
+    followed: bool,
+    linesep: str = "\n",
 ) -> None:
     """Rewrite trivia runs to one blank line before a table header, none elsewhere.
 
@@ -98,6 +102,10 @@ def _normalize_blank_lines(
     Comments keep their order and attachment; only ``Whitespace`` entries are
     rewritten, so blank lines inside multi-line string values (parsed as part
     of the value, not as trivia) are untouched.
+
+    ``linesep`` is the ending to write when a boundary has no trivia of its own
+    to copy: an empty table's body holds nothing, so the ending of the header
+    that declared it is the only nearby evidence.
     """
     body = container.body
     last = max(
@@ -118,20 +126,29 @@ def _normalize_blank_lines(
         separate = (
             declaration and not after_declaration and (bool(result) or separate_first)
         )
-        result.extend(_rebuild_run(run, separate=separate, previous=result))
+        result.extend(
+            _rebuild_run(run, separate=separate, previous=result, fallback=linesep)
+        )
         run = []
         result.append(entry)
         if declaration:
-            _normalize_children(item, followed=index < last or followed)
+            _normalize_children(
+                item, followed=index < last or followed, linesep=linesep
+            )
         after_declaration = declaration
 
     result.extend(
-        _rebuild_run(run, separate=followed and not after_declaration, previous=result)
+        _rebuild_run(
+            run,
+            separate=followed and not after_declaration,
+            previous=result,
+            fallback=linesep,
+        )
     )
     body[:] = result
 
 
-def _normalize_children(item: Item, *, followed: bool) -> None:
+def _normalize_children(item: Item, *, followed: bool, linesep: str) -> None:
     """Normalize the bodies a declaration owns, tracking rendered neighbours."""
     match item:
         case Table():
@@ -139,6 +156,7 @@ def _normalize_children(item: Item, *, followed: bool) -> None:
                 item.value,
                 separate_first=not item.is_super_table(),
                 followed=followed,
+                linesep=_header_linesep(item, linesep),
             )
         case AoT():
             for index, table in enumerate(item.body):
@@ -146,29 +164,58 @@ def _normalize_children(item: Item, *, followed: bool) -> None:
                     table.value,
                     separate_first=True,
                     followed=index < len(item.body) - 1 or followed,
+                    linesep=_header_linesep(table, linesep),
                 )
         case _:
             pass
 
 
+def _header_linesep(item: Item, fallback: str) -> str:
+    """Return the line ending of a declaration's own header line."""
+    trail = item.trivia.trail
+    if trail.endswith("\r\n"):
+        return "\r\n"
+    if trail.endswith("\n"):
+        return "\n"
+    return fallback
+
+
 def _rebuild_run(
-    run: list[BodyEntry], *, separate: bool, previous: list[BodyEntry]
+    run: list[BodyEntry], *, separate: bool, previous: list[BodyEntry], fallback: str
 ) -> list[BodyEntry]:
     """Drop a trivia run's whitespace, optionally re-adding one leading blank line."""
     comments = [entry for entry in run if not isinstance(entry[1], Whitespace)]
     if not separate:
         return comments
-    return [(None, Whitespace(_run_linesep(run, previous))), *comments]
+    return [(None, Whitespace(_run_linesep(run, previous, fallback))), *comments]
 
 
-def _run_linesep(run: list[BodyEntry], previous: list[BodyEntry]) -> str:
+def _run_linesep(run: list[BodyEntry], previous: list[BodyEntry], fallback: str) -> str:
     """Reuse a neighbouring line ending so a CRLF source keeps CRLF blank lines."""
     endings = [item.as_string() for _, item in run if isinstance(item, Whitespace)]
     if previous:
-        _, item = previous[-1]
-        if not isinstance(item, Whitespace):
-            endings.append(item.trivia.trail)
-    return "\r\n" if any("\r\n" in ending for ending in endings) else "\n"
+        endings.append(_entry_trail(previous[-1][1]))
+    if any("\r\n" in ending for ending in endings):
+        return "\r\n"
+    # An empty body offers no evidence at all; fall back to the enclosing
+    # declaration's header ending rather than assuming LF.
+    return "\n" if any(ending.endswith("\n") for ending in endings) else fallback
+
+
+def _entry_trail(item: Item) -> str:
+    """Return the trail of the last line an entry renders.
+
+    A dotted key-value parses as a ``Table`` wrapper whose own trail is a bare
+    newline, while the ending that actually renders belongs to the value nested
+    inside it -- reading the wrapper would report LF for a CRLF line.
+    """
+    if isinstance(item, Whitespace):
+        return item.as_string()
+    if isinstance(item, Table):
+        container = _trailing_container(item.value)
+        if container is not None and container.body:
+            return _entry_trail(container.body[-1][1])
+    return item.trivia.trail
 
 
 def _restore_maps(container: Container) -> None:

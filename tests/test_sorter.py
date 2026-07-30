@@ -571,3 +571,25 @@ def test_blank_lines_in_a_comment_only_document() -> None:
     result = sort_toml("# one\n\n\n# two\n", blank_lines=True)
 
     assert result == "# one\n# two\n"
+
+
+def test_blank_lines_reuses_crlf_when_separating_empty_tables() -> None:
+    # An empty table's body holds no trivia to copy an ending from, so it has
+    # to come from the header that declared it.
+    result = sort_toml("[x]\r\n[y]\r\n", blank_lines=True)
+
+    assert result == "[x]\r\n\r\n[y]\r\n"
+
+
+def test_blank_lines_reuses_crlf_when_separating_empty_aot_elements() -> None:
+    result = sort_toml("[[z]]\r\n[[z]]\r\n", blank_lines=True)
+
+    assert result == "[[z]]\r\n\r\n[[z]]\r\n"
+
+
+def test_blank_lines_reuses_crlf_after_a_dotted_key() -> None:
+    # A dotted key-value parses as a Table wrapper whose own trail is a bare
+    # newline; the CRLF lives on the value nested inside it.
+    result = sort_toml("z.y = 1\r\n[t]\r\nq = 1\r\n", blank_lines=True)
+
+    assert result == "z.y = 1\r\n\r\n[t]\r\nq = 1\r\n"

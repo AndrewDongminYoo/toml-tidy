@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Blank-line normalization inserted an LF separator into a CRLF document whenever the boundary had no trivia of its own to copy an ending from: an empty table body (`sort_toml("[x]\r\n[y]\r\n", blank_lines=True)`), or a dotted key-value, whose `Table` wrapper reports a bare newline while the CRLF belongs to the value nested inside it. The ending now comes from the declaring header or from the value that actually renders. Files with uniform line endings processed through the CLI were unaffected, since it normalizes and restores them around the sort.
+
 ## [v0.3.0] — 2026-07-30
 
 ### Added
