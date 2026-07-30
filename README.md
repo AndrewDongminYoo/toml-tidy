@@ -67,7 +67,7 @@ blank-lines = false # true normalizes blank lines
 ```yaml
 repos:
   - repo: https://github.com/AndrewDongminYoo/toml-tidy
-    rev: v0.3.0 # pin the latest release; the hook ships from v0.2.0 onward
+    rev: v0.3.1 # pin the latest release; the hook ships from v0.2.0 onward
     hooks:
       - id: toml-tidy
 ```

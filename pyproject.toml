@@ -1,6 +1,6 @@
 [project]
 name = "toml-tidy"
-version = "0.3.0"
+version = "0.3.1"
 description = "Sort TOML keys without changing table hierarchy"
 readme = "README.md"
 license = "MIT"
