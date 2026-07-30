@@ -45,6 +45,8 @@ With multiple paths the worst exit code wins: `2` for any error, else `1` for an
 
 `--scope` limits what gets sorted: `all` (default) sorts everything, `tables` sorts only sibling table declarations, and `keys` sorts only direct key-value entries.
 
+`--blank-lines` additionally normalizes blank lines to exactly one before every table header and none anywhere else; `--no-blank-lines` (the default) leaves every blank line where it was.
+
 ## Configuration
 
 Defaults can be set in the nearest `pyproject.toml` found walking up from each target file, under `[tool.toml-tidy]`.
@@ -52,9 +54,10 @@ CLI flags always override the configuration.
 
 ```toml
 [tool.toml-tidy]
-order = "natural" # or "alpha"
-scope = "all"     # "tables" | "keys"
+order = "natural"   # or "alpha"
+scope = "all"       # "tables" | "keys"
 first = ["project", "build-system"]
+blank-lines = false # true normalizes blank lines
 ```
 
 `first` pins top-level entries by name, in the listed order, ahead of their sorted siblings; it never applies inside nested tables, and it has no CLI flag.
@@ -67,6 +70,15 @@ repos:
     rev: v0.2.0 # first tag that ships this hook; pin the latest release
     hooks:
       - id: toml-tidy
+```
+
+The hook runs `toml-tidy --in-place`, and `args` are appended to it, so flags are set per repository without losing in-place rewriting:
+
+```yaml
+hooks:
+  - id: toml-tidy
+    args: [--blank-lines, --order, alpha]
+    exclude: ^uv\.lock$ # lockfiles are TOML too
 ```
 
 ## Trunk
@@ -97,8 +109,47 @@ Parent-child hierarchy remains unchanged.
 
 Standalone comments move with the following key or table declaration.
 
-Whitespace between entries remains after the preceding entry, and trailing whitespace remains at its table boundary.
+Whitespace between entries remains after the preceding entry, and trailing whitespace remains at its table boundary, unless `--blank-lines` is enabled.
 
 Inline comments, value formatting, and key quoting remain attached to their parsed `tomlkit` items.
 
 Keys inside inline tables are not reordered.
+
+## Blank lines
+
+`--blank-lines` (config: `blank-lines = true`) is off by default and runs after sorting.
+It rewrites blank lines only, never comments or values:
+
+- Exactly one blank line precedes every table and array-of-tables header, above the comment run attached to that header rather than between the comment and the header.
+- No blank lines remain between key-value entries, inside a comment run, or at the end of the file.
+- The document's first rendered line never gains a blank line above it.
+- Blank lines inside multi-line string values belong to the value, not to the layout, and are untouched.
+
+Given this input:
+
+```toml
+a = 1
+
+b = 2
+[x]
+p = 1
+
+
+[y]
+q = 1
+```
+
+`toml-tidy --blank-lines` produces:
+
+```toml
+a = 1
+b = 2
+
+[x]
+p = 1
+
+[y]
+q = 1
+```
+
+The result is stable, so `--check` reports a file once and reports it clean after `--in-place` fixes it.

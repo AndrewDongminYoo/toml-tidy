@@ -42,7 +42,7 @@ For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and 
 
 Per-file defaults come from the `[tool.toml-tidy]` table of the nearest `pyproject.toml` found walking up from each target file; the first `pyproject.toml` found wins whether or not it contains the table.
 
-Supported keys are `order`, `scope`, and `first`; CLI flags override `order` and `scope`, while `first` is configuration-only.
+Supported keys are `order`, `scope`, `first`, and `blank-lines`; CLI flags override `order`, `scope`, and `blank-lines`, while `first` is configuration-only.
 
 `first` lists top-level entry names that are pinned ahead of their sorted siblings in the listed order, matched against the leading segment of the parsed key path, and never applies inside nested tables.
 
@@ -61,6 +61,8 @@ Standalone comments are assigned to the following sortable key and move with tha
 Comments directly before a table declaration move with that declaration when sibling tables are reordered.
 
 Blank lines at the end of a key or table segment stay at that segment boundary.
+
+These blank-line placements hold unless the opt-in `blank-lines` setting is enabled, which rewrites blank lines after sorting to exactly one before every table header and none elsewhere; comments, values, and their attachment are still preserved.
 
 The implementation uses the parsed container body because `tomlkit`'s public mapping mutation API preserves insertion positions instead of exposing an ordering operation.
 

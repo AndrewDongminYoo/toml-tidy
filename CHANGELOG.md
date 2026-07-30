@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--blank-lines` / `--no-blank-lines` and the `blank-lines` configuration key (off by default) to normalize blank lines after sorting: exactly one before every table and array-of-tables header — above that header's attached comment run — and none between key entries, inside comment runs, at the end of the file, or above the document's first line. Blank lines inside multi-line string values are untouched, and the result is idempotent, so `--check` reports a file clean once `--in-place` has fixed it.
+
 ## [v0.2.0] — 2026-07-17
 
 ### Added
