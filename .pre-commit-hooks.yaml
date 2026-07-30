@@ -3,4 +3,7 @@
   description: Sort TOML keys while preserving table hierarchy, comments, and formatting.
   entry: toml-tidy --in-place
   language: python
+  # Overridable in .pre-commit-config.yaml; --in-place stays in entry so a
+  # user override cannot drop it and turn the hook into a stdout dump.
+  args: []
   types: [toml]
