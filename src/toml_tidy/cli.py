@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import stat
 import tomllib
 from contextlib import suppress
@@ -174,28 +175,56 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
+def _write_existing(path: Path, content: str) -> None:
+    """Rewrite an existing inode when replacement cannot preserve its owner."""
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        _ = handle.write(content)
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Replace a file only after its complete replacement is safely written."""
     target = path.resolve(strict=True)
     target_stat = target.stat()
     if not target_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
         raise PermissionError(13, "Permission denied", str(path))
-    mode = target_stat.st_mode
+
+    writable_descriptor = os.open(target, os.O_WRONLY)
+    os.close(writable_descriptor)
+    if target_stat.st_nlink > 1:
+        _write_existing(target, content)
+        return
+
     temporary_path: Path | None = None
     try:
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            newline="",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-            _ = handle.write(content)
-        temporary_path.chmod(mode)
-        if hasattr(os, "chown"):
-            os.chown(temporary_path, target_stat.st_uid, target_stat.st_gid)
+        try:
+            with NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                if not hasattr(os, "fchown"):
+                    _write_existing(target, content)
+                    return
+                try:
+                    os.fchown(handle.fileno(), target_stat.st_uid, target_stat.st_gid)
+                except (NotImplementedError, PermissionError):
+                    _write_existing(target, content)
+                    return
+
+                shutil.copystat(target, temporary_path)
+                _ = handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except PermissionError:
+            if temporary_path is not None:
+                raise
+            _write_existing(target, content)
+            return
+
         _ = temporary_path.replace(target)
     finally:
         if temporary_path is not None:
