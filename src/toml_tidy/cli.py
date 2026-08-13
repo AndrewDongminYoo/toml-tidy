@@ -202,22 +202,23 @@ def _atomic_write(path: Path, content: str) -> None:
                 encoding="utf-8",
                 newline="",
                 dir=target.parent,
-                prefix=f".{target.name}.",
+                prefix=".toml-tidy-",
                 delete=False,
             ) as handle:
                 temporary_path = Path(handle.name)
-                if not hasattr(os, "fchown"):
-                    _write_existing(target, content)
-                    return
-                try:
-                    os.fchown(handle.fileno(), target_stat.st_uid, target_stat.st_gid)
-                except (NotImplementedError, PermissionError):
-                    _write_existing(target, content)
-                    return
-
-                shutil.copystat(target, temporary_path)
                 _ = handle.write(content)
                 handle.flush()
+                if hasattr(os, "fchown"):
+                    try:
+                        os.fchown(
+                            handle.fileno(), target_stat.st_uid, target_stat.st_gid
+                        )
+                    except (NotImplementedError, PermissionError):
+                        _write_existing(target, content)
+                        return
+
+                shutil.copystat(target, temporary_path)
+                os.utime(temporary_path, None)
                 os.fsync(handle.fileno())
         except PermissionError:
             if temporary_path is not None:

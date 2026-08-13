@@ -1,6 +1,7 @@
 import errno
 import os
 import re
+import stat
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Self, TextIO, cast
@@ -18,6 +19,8 @@ _INVALID_UTF8 = b"a = \xff\xfe\n"
 # rich treats GitHub Actions as a color terminal, so usage errors carry ANSI
 # codes in CI but not locally; strip them before asserting on message text.
 _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
+_GETEUID = cast("Callable[[], int] | None", vars(os).get("geteuid"))
+_RUNNING_AS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -105,7 +108,10 @@ def test_in_place_on_unwritable_file_exits_with_error_code(
     assert path.read_text(encoding="utf-8") == source
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX permission classes required")
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX permission classes required",
+)
 def test_in_place_checks_effective_write_access(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     source = "b = 1\na = 2\n"
@@ -120,7 +126,6 @@ def test_in_place_checks_effective_write_access(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == source
 
 
-@pytest.mark.skipif(not hasattr(os, "fchown"), reason="file ownership API required")
 def test_in_place_write_failure_preserves_original_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,6 +177,7 @@ def test_in_place_write_failure_preserves_original_file(
         return FailingWriter(handle)
 
     monkeypatch.setattr(toml_tidy.cli, "NamedTemporaryFile", failed_tempfile)
+    monkeypatch.delattr(os, "fchown", raising=False)
 
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
@@ -220,7 +226,10 @@ def test_in_place_falls_back_when_ownership_cannot_be_transferred(
     assert path.stat().st_ino == original_inode
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX directory modes required")
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX directory modes required",
+)
 def test_in_place_writable_file_in_unwritable_directory(tmp_path: Path) -> None:
     directory = tmp_path / "unwritable"
     directory.mkdir()
@@ -290,6 +299,46 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert get_xattr(path, attribute) == b"preserved"
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_preserves_setid(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    path.chmod(0o6755)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+def test_in_place_updates_mtime(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    old_timestamp = 946684800
+    os.utime(path, (old_timestamp, old_timestamp))
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.stat().st_mtime > old_timestamp
+
+
+@pytest.mark.skipif(not hasattr(os, "pathconf"), reason="path limits unavailable")
+def test_in_place_long_filename(tmp_path: Path) -> None:
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    suffix = ".toml"
+    path = tmp_path / ("x" * (name_max - len(suffix)) + suffix)
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
 
 
 def test_deeply_nested_header_exits_with_error_code(tmp_path: Path) -> None:
