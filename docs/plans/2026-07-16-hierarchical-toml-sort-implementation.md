@@ -37,7 +37,7 @@
 
 **Interfaces:**
 
-- Produces: `toml-tidy` console script bound to `toml_hierarchical_sort.cli:app`.
+- Produces: `toml-tidy` console script bound to `toml_tidy.cli:app`.
 - Produces: `app: typer.Typer` for CLI integration tests.
 
 - [x] **Step 1: Write the failing CLI help test.**
@@ -45,7 +45,7 @@
 ```python
 from typer.testing import CliRunner
 
-from toml_hierarchical_sort.cli import app
+from toml_tidy.cli import app
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -61,7 +61,7 @@ def test_help_when_called_without_arguments() -> None:
 
 Run: `uv run pytest tests/test_cli.py::test_help_when_called_without_arguments -v`
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'toml_hierarchical_sort'`.
+Expected: FAIL with `ModuleNotFoundError: No module named 'toml_tidy'`.
 
 - [x] **Step 3: Replace the starter metadata and script with the minimal Typer application.**
 
@@ -78,7 +78,7 @@ dependencies = [
 ]
 
 [project.scripts]
-toml-tidy = "toml_hierarchical_sort.cli:app"
+toml-tidy = "toml_tidy.cli:app"
 ```
 
 ```python
@@ -112,7 +112,7 @@ Expected: PASS with no lint or type diagnostics.
 - [x] **Step 1: Write failing ordering tests.**
 
 ```python
-from toml_hierarchical_sort.sorter import OrderMode, sort_toml
+from toml_tidy.sorter import OrderMode, sort_toml
 
 
 def test_sort_toml_when_natural_order_is_selected() -> None:
