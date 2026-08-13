@@ -24,7 +24,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --frozen
       - run: uv pip install tomlkit==${{ matrix.tomlkit }}
-      - run: uv run pytest
+      - run: uv run --no-sync pytest
 
   quality:
     name: Static quality gates

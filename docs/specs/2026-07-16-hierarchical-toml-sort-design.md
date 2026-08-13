@@ -74,7 +74,9 @@ This dependency on a private representation is isolated in one module and protec
 
 Invalid TOML reports the parser error with the input path and leaves the file unchanged.
 
-In-place output is written to a temporary file in the destination directory and atomically replaces the resolved target only after the complete write succeeds; failures leave the original file unchanged.
+In-place output rejects targets without a writable mode bit, then writes to a temporary file in the destination directory and atomically replaces the resolved target only after the complete write succeeds; failures leave the original file unchanged.
+
+On platforms that expose file ownership, replacement preserves the target's user and group ownership as well as its permission mode.
 
 `--in-place` and `--check` are mutually exclusive.
 

@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 from typing import Self
@@ -83,18 +84,13 @@ def test_non_utf8_file_exits_with_error_code(tmp_path: Path) -> None:
 
 
 def test_in_place_on_unwritable_file_exits_with_error_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.toml"
     source = "b = 1\na = 2\n"
     _ = path.write_text(source, encoding="utf-8")
 
-    def deny_write(*_args: object, **_kwargs: object) -> None:
-        # chmod(0o444) is bypassed by root (Docker/CI), so simulate the
-        # write failure deterministically instead.
-        raise PermissionError(13, "Permission denied", str(path))
-
-    monkeypatch.setattr(toml_tidy.cli, "NamedTemporaryFile", deny_write)
+    path.chmod(0o444)
     runner = CliRunner()
 
     result = runner.invoke(app, [str(path), "--in-place"])
@@ -135,6 +131,25 @@ def test_in_place_write_failure_preserves_original_file(
 
     assert result.exit_code == 2
     assert path.read_text(encoding="utf-8") == source
+
+
+def test_in_place_preserves_target_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_stat = path.stat()
+    ownership: list[tuple[int, int]] = []
+
+    def record_ownership(_path: object, uid: int, gid: int) -> None:
+        ownership.append((uid, gid))
+
+    monkeypatch.setattr(os, "chown", record_ownership)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert ownership == [(original_stat.st_uid, original_stat.st_gid)]
 
 
 def test_deeply_nested_header_exits_with_error_code(tmp_path: Path) -> None:

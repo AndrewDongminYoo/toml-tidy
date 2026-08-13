@@ -1,6 +1,8 @@
 """Command-line interface for hierarchical TOML sorting."""
 
+import os
 import re
+import stat
 import tomllib
 from contextlib import suppress
 from enum import StrEnum
@@ -175,7 +177,10 @@ def _apply_linesep(content: str, linesep: str) -> str:
 def _atomic_write(path: Path, content: str) -> None:
     """Replace a file only after its complete replacement is safely written."""
     target = path.resolve(strict=True)
-    mode = target.stat().st_mode
+    target_stat = target.stat()
+    if not target_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise PermissionError(13, "Permission denied", str(path))
+    mode = target_stat.st_mode
     temporary_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -189,6 +194,8 @@ def _atomic_write(path: Path, content: str) -> None:
             temporary_path = Path(handle.name)
             _ = handle.write(content)
         temporary_path.chmod(mode)
+        if hasattr(os, "chown"):
+            os.chown(temporary_path, target_stat.st_uid, target_stat.st_gid)
         _ = temporary_path.replace(target)
     finally:
         if temporary_path is not None:
