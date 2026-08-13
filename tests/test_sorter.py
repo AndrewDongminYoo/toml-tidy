@@ -7,6 +7,13 @@ from toml_tidy.sorter import OrderMode, Scope, sort_toml
 
 _sort_document = sorter._sort_document  # pyright: ignore[reportPrivateUsage]
 
+_INVARIANT_DOCUMENTS = (
+    'z = 1\na.b = 2\n"quoted key" = 3\n',
+    "# zebra\n[z]\nb = 1\na = 2\n\n# apple\n[a]\nx = 3\n",
+    "[[items]]\nz = 1\n[items.child]\nb = 2\na = 1\n[[items]]\ny = 2\n",
+    "[a.y]\nz = 1\n[b]\nk = 2\n[a.x]\nq = 3\n",
+)
+
 
 def test_sort_document_keeps_document_key_lookup_consistent() -> None:
     document = tomlkit.parse("b = 1\na = 2\nc = 3\n")
@@ -16,6 +23,19 @@ def test_sort_document_keeps_document_key_lookup_consistent() -> None:
     assert document["a"] == 2
     assert document["b"] == 1
     assert document["c"] == 3
+
+
+@pytest.mark.parametrize("source", _INVARIANT_DOCUMENTS)
+@pytest.mark.parametrize("order", OrderMode)
+@pytest.mark.parametrize("scope", Scope)
+@pytest.mark.parametrize("blank_lines", [False, True])
+def test_sort_toml_preserves_semantics_and_is_idempotent(
+    source: str, order: OrderMode, scope: Scope, *, blank_lines: bool
+) -> None:
+    result = sort_toml(source, order, scope, blank_lines=blank_lines)
+
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result, order, scope, blank_lines=blank_lines) == result
 
 
 def test_sort_document_keeps_nested_table_key_lookup_consistent() -> None:
@@ -40,6 +60,16 @@ def test_sort_document_keeps_super_table_key_lookup_consistent() -> None:
     assert document["a"]["x"]["v"] == 3
     assert document["a"]["y"]["v"] == 1
     assert document["b"]["v"] == 2
+
+
+def test_sort_document_keeps_array_of_tables_lookup_consistent() -> None:
+    document = tomlkit.parse("[[items]]\nb = 1\na = 2\n[[items]]\nd = 3\nc = 4\n")
+
+    _sort_document(document, OrderMode.NATURAL)
+
+    assert document["items"][0]["a"] == 2
+    assert document["items"][1]["c"] == 4
+    assert tomlkit.parse(tomlkit.dumps(document)).unwrap() == document.unwrap()
 
 
 def test_sort_toml_when_natural_order_is_selected() -> None:

@@ -50,6 +50,8 @@ When a segment kind is excluded by `scope`, `first` cannot move entries of that 
 
 An unreadable configuration file or an invalid configuration value reports `{pyproject path}: {message}` on stderr and exits with code two.
 
+Unknown keys in `[tool.toml-tidy]` are invalid and report the same configuration error rather than being silently ignored.
+
 ## Representation Strategy
 
 The implementation parses source with `tomlkit` and serializes the same document object after reordering its parsed container body.
@@ -71,6 +73,8 @@ This dependency on a private representation is isolated in one module and protec
 ## Error Handling
 
 Invalid TOML reports the parser error with the input path and leaves the file unchanged.
+
+In-place output is written to a temporary file in the destination directory and atomically replaces the resolved target only after the complete write succeeds; failures leave the original file unchanged.
 
 `--in-place` and `--check` are mutually exclusive.
 

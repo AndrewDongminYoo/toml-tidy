@@ -1,16 +1,12 @@
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Self
 
 import pytest
 from typer.testing import CliRunner
 
+import toml_tidy.cli
 from toml_tidy.cli import app
-
-if TYPE_CHECKING:
-    from typing import IO
-
-    from _typeshed import OpenTextMode
 
 _INVALID_UTF8 = b"a = \xff\xfe\n"
 # rich treats GitHub Actions as a color terminal, so usage errors carry ANSI
@@ -92,31 +88,52 @@ def test_in_place_on_unwritable_file_exits_with_error_code(
     path = tmp_path / "config.toml"
     source = "b = 1\na = 2\n"
     _ = path.write_text(source, encoding="utf-8")
-    original_open = Path.open
 
-    def deny_write(
-        self: Path,
-        mode: "OpenTextMode" = "r",
-        *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> "IO[str]":
+    def deny_write(*_args: object, **_kwargs: object) -> None:
         # chmod(0o444) is bypassed by root (Docker/CI), so simulate the
         # write failure deterministically instead.
-        if "w" in mode:
-            raise PermissionError(13, "Permission denied", str(self))
-        return original_open(
-            self, mode, encoding=encoding, errors=errors, newline=newline
-        )
+        raise PermissionError(13, "Permission denied", str(path))
 
-    monkeypatch.setattr(Path, "open", deny_write)
+    monkeypatch.setattr(toml_tidy.cli, "NamedTemporaryFile", deny_write)
     runner = CliRunner()
 
     result = runner.invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 2
     assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
+
+
+def test_in_place_write_failure_preserves_original_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    temporary = tmp_path / ".config.toml.failed"
+
+    class FailingWriter:
+        name: str = str(temporary)
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def write(self, content: str) -> int:
+            _ = temporary.write_text(content[:2], encoding="utf-8")
+            message = "disk full"
+            raise OSError(message)
+
+    def failed_tempfile(*_args: object, **_kwargs: object) -> FailingWriter:
+        return FailingWriter()
+
+    monkeypatch.setattr(toml_tidy.cli, "NamedTemporaryFile", failed_tempfile)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
     assert path.read_text(encoding="utf-8") == source
 
 
@@ -435,6 +452,19 @@ def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert result.stderr.startswith(f"{pyproject}: ")
     assert "Traceback" not in result.output
+
+
+def test_unknown_config_key_exits_with_error(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_text("[tool.toml-tidy]\nblank_line = true\n", encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "unknown configuration key: 'blank_line'" in result.stderr
 
 
 def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:

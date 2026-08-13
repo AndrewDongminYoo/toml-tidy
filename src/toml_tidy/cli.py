@@ -2,8 +2,10 @@
 
 import re
 import tomllib
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Annotated, Final, NamedTuple, cast
 
 import typer
@@ -17,6 +19,7 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
     "multiple paths require --in-place or --check; stdout output takes one path"
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
+_CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
 
 
 class _ConfigError(Exception):
@@ -90,6 +93,13 @@ def _resolve_settings(
                 raise _ConfigError(message)
             section = cast("dict[str, object]", raw_section)
 
+    unknown_keys = sorted(section.keys() - _CONFIG_KEYS)
+    if unknown_keys:
+        noun = "key" if len(unknown_keys) == 1 else "keys"
+        rendered = ", ".join(repr(key) for key in unknown_keys)
+        message = f"{pyproject}: unknown configuration {noun}: {rendered}"
+        raise _ConfigError(message)
+
     if order is None:
         order_raw = section.get("order", OrderMode.NATURAL.value)
         order = _parse_enum(order_raw, OrderMode, "order", pyproject)
@@ -160,6 +170,30 @@ def _apply_linesep(content: str, linesep: str) -> str:
     if linesep == "\n":
         return content.replace("\r\n", "\n")
     return content
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Replace a file only after its complete replacement is safely written."""
+    target = path.resolve(strict=True)
+    mode = target.stat().st_mode
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            _ = handle.write(content)
+        temporary_path.chmod(mode)
+        _ = temporary_path.replace(target)
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink()
 
 
 @app.command()
@@ -245,8 +279,7 @@ def _process_file(
     if in_place:
         if source != sorted_source:
             try:
-                with path.open("w", encoding="utf-8", newline="") as handle:
-                    _ = handle.write(output)
+                _atomic_write(path, output)
             except OSError as error:
                 typer.echo(f"{path}: {error}", err=True)
                 return 2

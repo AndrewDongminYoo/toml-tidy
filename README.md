@@ -62,6 +62,8 @@ blank-lines = false # true normalizes blank lines
 
 `first` pins top-level entries by name, in the listed order, ahead of their sorted siblings; it never applies inside nested tables, and it has no CLI flag.
 
+Unknown keys in `[tool.toml-tidy]` are rejected so configuration typos cannot silently fall back to defaults.
+
 ## pre-commit
 
 ```yaml
@@ -153,3 +155,16 @@ q = 1
 ```
 
 The result is stable, so `--check` reports a file once and reports it clean after `--in-place` fixes it.
+
+## Development
+
+Run the same quality gates enforced by CI before committing:
+
+```bash
+uv run pytest
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run basedpyright
+```
+
+CI runs the test suite on every supported Python version and against the lower and upper tested `tomlkit` patch releases because the sorter intentionally isolates a dependency on `tomlkit`'s private container representation.
