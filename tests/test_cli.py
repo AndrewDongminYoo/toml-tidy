@@ -126,6 +126,7 @@ def test_in_place_checks_effective_write_access(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == source
 
 
+@pytest.mark.skipif(os.name == "nt", reason="non-Windows atomic replacement required")
 def test_in_place_write_failure_preserves_original_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,6 +219,21 @@ def test_in_place_falls_back_when_ownership_cannot_be_transferred(
         raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
 
     monkeypatch.setattr(os, "fchown", deny_ownership_transfer)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino == original_inode
+
+
+def test_in_place_preserves_windows_security_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_inode = path.stat().st_ino
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", True)
 
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 

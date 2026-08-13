@@ -23,6 +23,7 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
+_IS_WINDOWS: Final = os.name == "nt"
 
 
 class _ConfigError(Exception):
@@ -176,7 +177,7 @@ def _apply_linesep(content: str, linesep: str) -> str:
 
 
 def _write_existing(path: Path, content: str) -> None:
-    """Rewrite an existing inode when replacement cannot preserve its owner."""
+    """Rewrite an existing inode when replacement cannot preserve security metadata."""
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)
 
@@ -190,7 +191,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
     writable_descriptor = os.open(target, os.O_WRONLY)
     os.close(writable_descriptor)
-    if target_stat.st_nlink > 1:
+    if _IS_WINDOWS or target_stat.st_nlink > 1:
         _write_existing(target, content)
         return
 

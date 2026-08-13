@@ -78,6 +78,8 @@ In-place output rejects targets without a writable mode bit or effective write a
 
 When hard links, directory permissions, or ownership prevent a safe replacement but the existing file is writable, in-place output rewrites the existing inode so linked or group-writable files remain consistent and retain their metadata.
 
+On Windows, in-place output rewrites the existing file so its owner and DACL remain attached; this platform-specific path is not atomic.
+
 On platforms that expose file ownership, atomic replacement preserves the target's user and group ownership and uses the standard library to copy its permission mode and other supported metadata.
 
 `--in-place` and `--check` are mutually exclusive.
