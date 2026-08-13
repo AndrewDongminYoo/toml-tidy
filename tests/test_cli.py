@@ -281,6 +281,29 @@ def test_in_place_sync_failure_preserves_original_file(
     assert path.read_text(encoding="utf-8") == source
 
 
+def test_in_place_keeps_reused_temp_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    reused_content = "created by another process"
+    original_replace = Path.replace
+
+    def replace_and_reuse(self: Path, target: Path) -> Path:
+        result = original_replace(self, target)
+        _ = self.write_text(reused_content, encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(Path, "replace", replace_and_reuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    reused_paths = list(tmp_path.glob(".toml-tidy-*"))
+    assert len(reused_paths) == 1
+    assert reused_paths[0].read_text(encoding="utf-8") == reused_content
+
+
 def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
     if not hasattr(os, "setxattr") or not hasattr(os, "getxattr"):
         pytest.skip("extended attribute APIs are unavailable")

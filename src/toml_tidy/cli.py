@@ -227,6 +227,7 @@ def _atomic_write(path: Path, content: str) -> None:
             return
 
         _ = temporary_path.replace(target)
+        temporary_path = None
     finally:
         if temporary_path is not None:
             with suppress(OSError):
