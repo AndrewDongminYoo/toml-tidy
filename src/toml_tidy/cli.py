@@ -1,9 +1,14 @@
 """Command-line interface for hierarchical TOML sorting."""
 
+import os
 import re
+import shutil
+import stat
 import tomllib
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Annotated, Final, NamedTuple, cast
 
 import typer
@@ -17,6 +22,8 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
     "multiple paths require --in-place or --check; stdout output takes one path"
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
+_CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
+_IS_WINDOWS: Final = os.name == "nt"
 
 
 class _ConfigError(Exception):
@@ -90,6 +97,13 @@ def _resolve_settings(
                 raise _ConfigError(message)
             section = cast("dict[str, object]", raw_section)
 
+    unknown_keys = sorted(section.keys() - _CONFIG_KEYS)
+    if unknown_keys:
+        noun = "key" if len(unknown_keys) == 1 else "keys"
+        rendered = ", ".join(repr(key) for key in unknown_keys)
+        message = f"{pyproject}: unknown configuration {noun}: {rendered}"
+        raise _ConfigError(message)
+
     if order is None:
         order_raw = section.get("order", OrderMode.NATURAL.value)
         order = _parse_enum(order_raw, OrderMode, "order", pyproject)
@@ -160,6 +174,65 @@ def _apply_linesep(content: str, linesep: str) -> str:
     if linesep == "\n":
         return content.replace("\r\n", "\n")
     return content
+
+
+def _write_existing(path: Path, content: str) -> None:
+    """Rewrite an existing inode when replacement cannot preserve security metadata."""
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        _ = handle.write(content)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Replace a file only after its complete replacement is safely written."""
+    target = path.resolve(strict=True)
+    target_stat = target.stat()
+    if not target_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    writable_descriptor = os.open(target, os.O_WRONLY)
+    os.close(writable_descriptor)
+    if _IS_WINDOWS or target_stat.st_nlink > 1:
+        _write_existing(target, content)
+        return
+
+    temporary_path: Path | None = None
+    try:
+        try:
+            with NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="",
+                dir=target.parent,
+                prefix=".toml-tidy-",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                _ = handle.write(content)
+                handle.flush()
+                if hasattr(os, "fchown"):
+                    try:
+                        os.fchown(
+                            handle.fileno(), target_stat.st_uid, target_stat.st_gid
+                        )
+                    except (NotImplementedError, PermissionError):
+                        _write_existing(target, content)
+                        return
+
+                shutil.copystat(target, temporary_path)
+                os.utime(temporary_path, None)
+                os.fsync(handle.fileno())
+        except PermissionError:
+            if temporary_path is not None:
+                raise
+            _write_existing(target, content)
+            return
+
+        _ = temporary_path.replace(target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink()
 
 
 @app.command()
@@ -245,8 +318,7 @@ def _process_file(
     if in_place:
         if source != sorted_source:
             try:
-                with path.open("w", encoding="utf-8", newline="") as handle:
-                    _ = handle.write(output)
+                _atomic_write(path, output)
             except OSError as error:
                 typer.echo(f"{path}: {error}", err=True)
                 return 2

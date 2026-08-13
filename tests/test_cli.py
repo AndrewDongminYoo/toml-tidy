@@ -1,21 +1,26 @@
+import errno
+import os
 import re
+import stat
 from pathlib import Path
-from typing import TYPE_CHECKING
+from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING, Self, TextIO, cast
 
 import pytest
 from typer.testing import CliRunner
 
+import toml_tidy.cli
 from toml_tidy.cli import app
 
 if TYPE_CHECKING:
-    from typing import IO
-
-    from _typeshed import OpenTextMode
+    from collections.abc import Callable
 
 _INVALID_UTF8 = b"a = \xff\xfe\n"
 # rich treats GitHub Actions as a color terminal, so usage errors carry ANSI
 # codes in CI but not locally; strip them before asserting on message text.
 _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
+_GETEUID = cast("Callable[[], int] | None", vars(os).get("geteuid"))
+_RUNNING_AS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -87,30 +92,13 @@ def test_non_utf8_file_exits_with_error_code(tmp_path: Path) -> None:
 
 
 def test_in_place_on_unwritable_file_exits_with_error_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.toml"
     source = "b = 1\na = 2\n"
     _ = path.write_text(source, encoding="utf-8")
-    original_open = Path.open
 
-    def deny_write(
-        self: Path,
-        mode: "OpenTextMode" = "r",
-        *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> "IO[str]":
-        # chmod(0o444) is bypassed by root (Docker/CI), so simulate the
-        # write failure deterministically instead.
-        if "w" in mode:
-            raise PermissionError(13, "Permission denied", str(self))
-        return original_open(
-            self, mode, encoding=encoding, errors=errors, newline=newline
-        )
-
-    monkeypatch.setattr(Path, "open", deny_write)
+    path.chmod(0o444)
     runner = CliRunner()
 
     result = runner.invoke(app, [str(path), "--in-place"])
@@ -118,6 +106,278 @@ def test_in_place_on_unwritable_file_exits_with_error_code(
     assert result.exit_code == 2
     assert "Traceback" not in result.output
     assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX permission classes required",
+)
+def test_in_place_checks_effective_write_access(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    # The owner class wins even though group and other have write bits.
+    path.chmod(0o466)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.skipif(os.name == "nt", reason="non-Windows atomic replacement required")
+def test_in_place_write_failure_preserves_original_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    original_tempfile = NamedTemporaryFile
+
+    class FailingWriter:
+        _handle: TextIO
+        name: str
+
+        def __init__(self, handle: TextIO) -> None:
+            self._handle = handle
+            self.name = handle.name
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._handle.close()
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def flush(self) -> None:
+            self._handle.flush()
+
+        def write(self, content: str) -> int:
+            _ = self._handle.write(content[:2])
+            message = "disk full"
+            raise OSError(message)
+
+    def failed_tempfile(*_args: object, **_kwargs: object) -> FailingWriter:
+        handle = cast(
+            "TextIO",
+            cast(
+                "object",
+                original_tempfile(
+                    "w",
+                    encoding="utf-8",
+                    newline="",
+                    dir=tmp_path,
+                    prefix=".config.toml.",
+                    delete=False,
+                ),
+            ),
+        )
+        return FailingWriter(handle)
+
+    monkeypatch.setattr(toml_tidy.cli, "NamedTemporaryFile", failed_tempfile)
+    monkeypatch.delattr(os, "fchown", raising=False)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.skipif(not hasattr(os, "fchown"), reason="file ownership API required")
+def test_in_place_preserves_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_stat = path.stat()
+    ownership: list[tuple[int, int]] = []
+
+    def record_ownership(_path: object, uid: int, gid: int) -> None:
+        ownership.append((uid, gid))
+
+    monkeypatch.setattr(os, "fchown", record_ownership)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert ownership == [(original_stat.st_uid, original_stat.st_gid)]
+
+
+@pytest.mark.skipif(not hasattr(os, "fchown"), reason="file ownership API required")
+def test_in_place_falls_back_when_ownership_cannot_be_transferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    original_inode = path.stat().st_ino
+
+    def deny_ownership_transfer(_path: object, _uid: int, _gid: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+
+    monkeypatch.setattr(os, "fchown", deny_ownership_transfer)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino == original_inode
+
+
+def test_in_place_preserves_windows_security_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_inode = path.stat().st_ino
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", True)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino == original_inode
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX directory modes required",
+)
+def test_in_place_writable_file_in_unwritable_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "unwritable"
+    directory.mkdir()
+    path = directory / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_inode = path.stat().st_ino
+    directory.chmod(0o555)
+
+    try:
+        result = CliRunner().invoke(app, [str(path), "--in-place"])
+    finally:
+        directory.chmod(0o755)
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino == original_inode
+
+
+def test_in_place_updates_all_hard_links(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    linked_path = tmp_path / "linked.toml"
+    os.link(path, linked_path)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert linked_path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino == linked_path.stat().st_ino
+
+
+@pytest.mark.skipif(not hasattr(os, "fchown"), reason="file ownership API required")
+def test_in_place_sync_failure_preserves_original_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+
+    def fail_sync(_file_descriptor: int) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(os, "fsync", fail_sync)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert path.read_text(encoding="utf-8") == source
+
+
+def test_in_place_keeps_reused_temp_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    reused_content = "created by another process"
+    original_replace = Path.replace
+
+    def replace_and_reuse(self: Path, target: Path) -> Path:
+        result = original_replace(self, target)
+        _ = self.write_text(reused_content, encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(Path, "replace", replace_and_reuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    reused_paths = list(tmp_path.glob(".toml-tidy-*"))
+    assert len(reused_paths) == 1
+    assert reused_paths[0].read_text(encoding="utf-8") == reused_content
+
+
+def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
+    if not hasattr(os, "setxattr") or not hasattr(os, "getxattr"):
+        pytest.skip("extended attribute APIs are unavailable")
+
+    set_xattr = cast("Callable[[Path, str, bytes], None]", vars(os)["setxattr"])
+    get_xattr = cast("Callable[[Path, str], bytes]", vars(os)["getxattr"])
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    attribute = "user.toml_tidy_test"
+    try:
+        set_xattr(path, attribute, b"preserved")
+    except OSError as error:
+        pytest.skip(f"extended attributes are unsupported: {error}")
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert get_xattr(path, attribute) == b"preserved"
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_preserves_setid(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    path.chmod(0o6755)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+def test_in_place_updates_mtime(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    old_timestamp = 946684800
+    os.utime(path, (old_timestamp, old_timestamp))
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.stat().st_mtime > old_timestamp
+
+
+@pytest.mark.skipif(not hasattr(os, "pathconf"), reason="path limits unavailable")
+def test_in_place_long_filename(tmp_path: Path) -> None:
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    suffix = ".toml"
+    path = tmp_path / ("x" * (name_max - len(suffix)) + suffix)
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
 
 
 def test_deeply_nested_header_exits_with_error_code(tmp_path: Path) -> None:
@@ -435,6 +695,19 @@ def test_invalid_config_value_exits_with_error(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert result.stderr.startswith(f"{pyproject}: ")
     assert "Traceback" not in result.output
+
+
+def test_rejects_unknown_config_key(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_text("[tool.toml-tidy]\nblank_line = true\n", encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{pyproject}: ")
+    assert "unknown configuration key: 'blank_line'" in result.stderr
 
 
 def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:

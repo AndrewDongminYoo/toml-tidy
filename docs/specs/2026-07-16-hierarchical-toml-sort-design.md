@@ -50,6 +50,8 @@ When a segment kind is excluded by `scope`, `first` cannot move entries of that 
 
 An unreadable configuration file or an invalid configuration value reports `{pyproject path}: {message}` on stderr and exits with code two.
 
+Unknown keys in `[tool.toml-tidy]` are invalid and report the same configuration error rather than being silently ignored.
+
 ## Representation Strategy
 
 The implementation parses source with `tomlkit` and serializes the same document object after reordering its parsed container body.
@@ -71,6 +73,14 @@ This dependency on a private representation is isolated in one module and protec
 ## Error Handling
 
 Invalid TOML reports the parser error with the input path and leaves the file unchanged.
+
+In-place output rejects targets without a writable mode bit or effective write access, then normally writes to a temporary file in the destination directory, synchronizes the complete output, and atomically replaces the resolved target; failures before replacement leave the original file unchanged.
+
+When hard links, directory permissions, or ownership prevent a safe replacement but the existing file is writable, in-place output rewrites the existing inode so linked or group-writable files remain consistent and retain their metadata.
+
+On Windows, in-place output rewrites the existing file so its owner and DACL remain attached; this platform-specific path is not atomic.
+
+On platforms that expose file ownership, atomic replacement preserves the target's user and group ownership and uses the standard library to copy its permission mode and other supported metadata.
 
 `--in-place` and `--check` are mutually exclusive.
 
