@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.0] — 2026-08-16
+
+### Changed
+
+- Unknown keys in `[tool.toml-tidy]` are now a configuration error (exit `2`) instead of being ignored, so a typo such as `blank_lines` no longer leaves the intended setting silently at its default.
+- `--in-place` no longer carries a POSIX or macOS access-control list across the write. The atomic replacement this release introduces produces a new inode, and the standard library copies the permission mode, timestamps, and flags onto it but no ACL, so a target whose access depends on an ACL entry rather than on its mode loses that entry; hard-linked and Windows targets, which are rewritten in place, keep theirs. Tracked as issue 11.
+
+### Fixed
+
+- `--in-place` truncated the target before writing, so an interrupted or failing write destroyed the original file. Output now goes to a temporary file in the destination directory and replaces the target only once the complete content is flushed and synchronized, carrying over the target's ownership, permission mode, and other metadata. A target with no writable mode bit, or one the process cannot open for writing, is rejected before any work begins. Hard-linked targets and Windows targets are rewritten in place instead, so links stay joined and the file keeps its owner and DACL, at the cost of atomicity on those paths.
+
 ## [v0.3.1] — 2026-07-30
 
 ### Fixed
@@ -42,6 +53,7 @@ Initial release.
 - Robust error contract: parse, encoding, filesystem, and recursion errors report `{path}: {message}` on stderr with exit code `2` and no traceback.
 - Python 3.12+ support, MIT license.
 
+[v0.4.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.3.1...v0.4.0
 [v0.3.1]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.1.0...v0.2.0
