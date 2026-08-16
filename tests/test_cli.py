@@ -48,6 +48,16 @@ def _grant_acl(path: Path) -> None:
     _ = subprocess.run(_acl_command("grant", path), check=True)  # noqa: S603
 
 
+def _grant_inheritable_acl(directory: Path) -> None:
+    """Give a directory an entry that new files inside it pick up."""
+    command = (
+        ["/bin/chmod", "+a", "everyone allow read,file_inherit", str(directory)]
+        if sys.platform == "darwin"
+        else ["/usr/bin/setfacl", "-d", "-m", "u:root:rwx", str(directory)]
+    )
+    _ = subprocess.run(command, check=True)  # noqa: S603
+
+
 def _setid_fixture(tmp_path: Path) -> tuple[Path, str]:
     """A set-ID target on the rewrite-in-place path, and its original content."""
     path = tmp_path / "config.toml"
@@ -478,6 +488,28 @@ def test_in_place_keeps_the_inode_when_the_acl_cannot_be_read(
     assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert _read_acl(path) == granted
     assert path.stat().st_ino == original_inode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")
+def test_in_place_does_not_inherit_the_directory_acl(tmp_path: Path) -> None:
+    # The temporary file is created in the target's own directory, so an
+    # inheriting entry there lands on it. Replacing would hand the file an
+    # access rule it never carried — a 0600 file becoming world-readable.
+    directory = tmp_path / "config"
+    directory.mkdir()
+    path = directory / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    path.chmod(0o600)
+    plain = _read_acl(path)
+    _grant_inheritable_acl(directory)
+    assert _read_acl(path) == plain, "the existing file should be unaffected"
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == plain
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")

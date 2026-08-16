@@ -47,7 +47,7 @@ def _load_acl_probe() -> "Callable[[Path], bool]":
 
     Linux needs none up front: ``shutil.copystat`` copies extended attributes
     there, which is where a POSIX ACL lives, so the replacement normally keeps
-    it — and :func:`_acl_reached` confirms afterwards that it did. macOS
+    it — and :func:`_acl_matches` confirms afterwards that it did. macOS
     exposes its ACLs through ``acl_get_file`` alone, which the standard
     library does not wrap, so the check is bound through ``ctypes``.
 
@@ -254,27 +254,40 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
         _ = handle.write(content)
 
 
-def _acl_reached(target: Path, copy: Path) -> bool:
-    """Say whether the target's POSIX ACL actually landed on its replacement.
+def _read_acl_xattr(
+    path: Path, getxattr: "Callable[[Path, str], bytes]"
+) -> bytes | None:
+    """Return the file's POSIX ACL, or ``None`` when it demonstrably has none.
 
-    ``shutil.copystat`` carries a Linux ACL across as an extended attribute,
-    but swallows the ``setxattr`` failure when a policy or mount refuses it —
-    so it can report success having copied nothing. Asked here rather than
-    assumed, since the answer decides whether replacing the inode would drop
-    an access rule.
+    Raises when the answer could not be obtained, which is not the same thing
+    as an absence and must not be recorded as one.
+    """
+    try:
+        return getxattr(path, _ACL_XATTR)
+    except OSError as error:
+        if error.errno in _XATTR_ABSENT_ERRNOS:
+            return None
+        raise
+
+
+def _acl_matches(target: Path, copy: Path) -> bool:
+    """Say whether the replacement carries exactly the target's ACL.
+
+    Both directions matter. ``shutil.copystat`` swallows a refused
+    ``setxattr``, so it can report success having carried nothing — and the
+    temporary file is created in the target's own directory, so a default ACL
+    there is inherited onto a replacement whose target had none, handing the
+    file an access rule it never carried. Either way the inode is kept
+    instead.
     """
     getxattr = cast("Callable[[Path, str], bytes] | None", vars(os).get("getxattr"))
     if getxattr is None:
-        return True
+        # Only macOS reaches here without the attribute API, and its own probe
+        # already found the target ACL-free, so the copy is the open question.
+        # Anywhere else, no API means no way to tell, which is not a yes.
+        return sys.platform == "darwin" and not _HAS_ACL(copy)
     try:
-        wanted = getxattr(target, _ACL_XATTR)
-    except OSError as error:
-        # Absent means there is nothing to carry, and replacing is safe.
-        # Unreadable means the check did not run, which is not the same
-        # answer — and the copy suppresses the very failure that produced it.
-        return error.errno in _XATTR_ABSENT_ERRNOS
-    try:
-        return getxattr(copy, _ACL_XATTR) == wanted
+        return _read_acl_xattr(target, getxattr) == _read_acl_xattr(copy, getxattr)
     except OSError:
         return False
 
@@ -316,7 +329,7 @@ def _atomic_write(path: Path, content: str) -> None:
                         return
 
                 shutil.copystat(target, temporary_path)
-                if not _acl_reached(target, temporary_path):
+                if not _acl_matches(target, temporary_path):
                     _write_existing(target, content, target_stat)
                     return
 
