@@ -21,12 +21,16 @@ jobs:
 
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
-      # Checked here so a missing section fails before anything is published;
-      # the release notes are read from it once the upload has succeeded.
+      # Both halves the release job reads are checked here, so a changelog
+      # omission fails before anything is published rather than after.
       - name: Check the CHANGELOG documents the tag
         env:
           TAG: ${{ github.ref_name }}
-        run: grep -q "^## \[$TAG\]" CHANGELOG.md
+        run: |
+          grep -q "^## \[$TAG\]" CHANGELOG.md \
+            || { echo "::error::CHANGELOG has no '## [$TAG]' section"; exit 1; }
+          grep -q "^\[$TAG\]: " CHANGELOG.md \
+            || { echo "::error::CHANGELOG has no '[$TAG]: ' compare link"; exit 1; }
 
       - name: Run tests
         run: uv run --frozen pytest -q
@@ -80,5 +84,8 @@ jobs:
           test -n "$notes" || { echo "::error::no CHANGELOG section for $TAG"; exit 1; }
           url=$(grep -m1 "^\[$TAG\]: " CHANGELOG.md | cut -d' ' -f2-)
           printf '%s\n\n**Full Changelog**: %s\n' "$notes" "$url" > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" \
+          # --verify-tag: gh creates a missing tag from the default branch,
+          # so a tag deleted while the publish environment was pending would
+          # come back here pointing at unrelated source.
+          gh release create "$TAG" --verify-tag \
             --title "🔖 Release $TAG" --notes-file "$RUNNER_TEMP/notes.md"
