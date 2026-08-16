@@ -86,7 +86,7 @@ A target carrying an access-control list the replacement cannot reproduce joins 
 
 Rewriting an existing inode restores the target's set-user-ID and set-group-ID bits, which the kernel clears on an unprivileged write. Without that, every path taken to protect one piece of security metadata would discard another.
 
-Eligibility is settled before the write, from ownership and group membership, so a target whose bits could not be put back is refused with its content and its mode both untouched. It is read rather than attempted because the attempt is destructive: clearing set-group-ID for a caller outside the file's group is a documented success, so a trial restore would strip the very bit it asked about. A process holding a capability that would have allowed more is refused too, which costs an error and never a bit. After the write, the restored mode is confirmed against the inode for the same reason a success return cannot be trusted.
+Eligibility is settled before the write, so a target whose bits could not be put back is refused with its content and its mode both untouched. One case is read rather than attempted: clearing set-group-ID for a caller outside the file's group is a documented success, so a trial restore would strip the very bit it asked about, and group membership is checked directly instead. With that case excluded, restoring the mode the inode already carries is a no-op where permitted, so the real call settles every other way authority can be missing — ownership, a capability, a squashed root over a network mount, a filesystem that refuses. After the write, the restored mode is confirmed against the inode, for the same reason a success return cannot be trusted.
 
 `--in-place` and `--check` are mutually exclusive.
 

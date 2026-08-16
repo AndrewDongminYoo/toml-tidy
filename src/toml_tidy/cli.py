@@ -228,27 +228,21 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
-def _may_restore_mode(target_stat: os.stat_result) -> bool:
-    """Say whether this process could put the target's set-ID bits back.
+def _keeps_setgid(target_stat: os.stat_result) -> bool:
+    """Say whether a chmod here would keep set-group-ID rather than drop it.
 
-    Read rather than attempted, because the attempt is not free: chmod on a
-    set-group-ID file by a caller outside the file's group clears that bit
-    and reports success, so a dry run would strip the very bit it is asking
-    about. Ownership and group membership decide it; a capability that
-    grants more is answered no here, which costs a refusal and never a bit.
+    This is the one question that cannot be settled by trying, because POSIX
+    answers it by clearing the bit and reporting success. Everything else
+    about the caller's authority — ownership, capabilities, a squashed root
+    over NFS, a filesystem that refuses outright — is left to the attempt,
+    which is harmless once this has ruled out the destructive case.
     """
     geteuid = cast("Callable[[], int] | None", vars(os).get("geteuid"))
     getegid = cast("Callable[[], int] | None", vars(os).get("getegid"))
     getgroups = cast("Callable[[], list[int]] | None", vars(os).get("getgroups"))
     if geteuid is None or getegid is None or getgroups is None:
         return True
-
-    euid = geteuid()
-    if euid == 0:
-        return True
-    if euid != target_stat.st_uid:
-        return False
-    if not target_stat.st_mode & stat.S_ISGID:
+    if geteuid() == 0:
         return True
     return target_stat.st_gid in {getegid(), *getgroups()}
 
@@ -261,9 +255,14 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
     # the write, so it keeps both its content and its mode.
     mode = target_stat.st_mode
     restores_setid = bool(mode & (stat.S_ISUID | stat.S_ISGID))
-    if restores_setid and not _may_restore_mode(target_stat):
-        message = f"cannot restore mode {stat.S_IMODE(mode):04o}"
-        raise PermissionError(errno.EPERM, message, str(path))
+    if restores_setid:
+        if mode & stat.S_ISGID and not _keeps_setgid(target_stat):
+            message = f"cannot restore mode {stat.S_IMODE(mode):04o}"
+            raise PermissionError(errno.EPERM, message, str(path))
+        # Now that the silent-clear case is excluded, restoring the mode the
+        # inode already carries is a no-op when permitted and an error when
+        # not — so the real operation can answer the rest for itself.
+        _restore_mode(path, mode)
 
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)

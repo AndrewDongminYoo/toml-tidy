@@ -468,15 +468,18 @@ def test_in_place_preserves_setid_on_a_hard_linked_file(tmp_path: Path) -> None:
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
-def test_in_place_refuses_setid_it_does_not_own(
+def test_in_place_refuses_setid_it_cannot_chmod(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # chmod needs ownership, so a set-ID target the caller may write but not
-    # own cannot get its bits back. Refusing has to leave the mode alone too,
-    # not only the content — a probing chmod would have been the thing that
-    # stripped it.
+    # Whatever denies the restore — not owning the target, a squashed root
+    # over NFS, an immutable flag — the attempt is what reports it, and it
+    # has to report before the write rather than after.
     path, source = _setid_fixture(tmp_path)
-    monkeypatch.setattr(os, "geteuid", lambda: path.stat().st_uid + 1)
+
+    def refuse(self: Path, _mode: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(Path, "chmod", refuse)
 
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
@@ -501,6 +504,12 @@ def test_in_place_refuses_setgid_outside_the_files_group(
     foreign_gid = path.stat().st_gid + 1
     monkeypatch.setattr(os, "getegid", lambda: foreign_gid)
     monkeypatch.setattr(os, "getgroups", lambda: [foreign_gid])
+    attempts: list[int] = []
+
+    def record(_self: Path, mode: int) -> None:
+        attempts.append(mode)
+
+    monkeypatch.setattr(Path, "chmod", record)
 
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
@@ -508,6 +517,9 @@ def test_in_place_refuses_setgid_outside_the_files_group(
     assert "Traceback" not in result.output
     assert path.read_text(encoding="utf-8") == source
     assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+    # The refusal must reach no chmod at all: attempting one here is what
+    # would clear the bit, which is why this case is settled by reading.
+    assert attempts == []
 
 
 @pytest.mark.skipif(
