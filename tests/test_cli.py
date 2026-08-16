@@ -1,7 +1,10 @@
 import errno
+import getpass
 import os
 import re
 import stat
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Self, TextIO, cast
@@ -21,6 +24,60 @@ _INVALID_UTF8 = b"a = \xff\xfe\n"
 _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 _GETEUID = cast("Callable[[], int] | None", vars(os).get("geteuid"))
 _RUNNING_AS_ROOT = _GETEUID is not None and _GETEUID() == 0
+
+
+def _acl_command(verb: str, path: Path) -> list[str]:
+    """Build the platform's grant-an-ACL-entry or print-the-ACL command."""
+    if sys.platform == "darwin":
+        entry = f"{getpass.getuser()} allow delete"
+        return (
+            ["/bin/chmod", "+a", entry, str(path)]
+            if verb == "grant"
+            else ["/bin/ls", "-lde", str(path)]
+        )
+    return (
+        ["/usr/bin/setfacl", "-m", "u:root:rwx", str(path)]
+        if verb == "grant"
+        else ["/usr/bin/getfacl", "-cp", str(path)]
+    )
+
+
+def _grant_acl(path: Path) -> None:
+    # No skip on a missing tool: a precondition that cannot be built is a
+    # failure to report, not a pass to record.
+    _ = subprocess.run(_acl_command("grant", path), check=True)  # noqa: S603
+
+
+def _grant_inheritable_acl(directory: Path) -> None:
+    """Give a directory an entry that new files inside it pick up."""
+    command = (
+        ["/bin/chmod", "+a", "everyone allow read,file_inherit", str(directory)]
+        if sys.platform == "darwin"
+        else ["/usr/bin/setfacl", "-d", "-m", "u:root:rwx", str(directory)]
+    )
+    _ = subprocess.run(command, check=True)  # noqa: S603
+
+
+def _setid_fixture(tmp_path: Path) -> tuple[Path, str]:
+    """A set-ID target on the rewrite-in-place path, and its original content."""
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    os.link(path, tmp_path / "linked.toml")
+    path.chmod(0o6755)
+    return path, source
+
+
+def _read_acl(path: Path) -> str:
+    completed = subprocess.run(  # noqa: S603
+        _acl_command("read", path), check=True, capture_output=True, text=True
+    )
+    if sys.platform != "darwin":
+        return completed.stdout
+    # ls prints the listing before the entries, and it carries the mtime the
+    # write updates — comparing it would fail whenever a run straddles a
+    # displayed minute, with every ACL entry intact.
+    return "".join(completed.stdout.splitlines(keepends=True)[1:])
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -360,10 +417,161 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
+    sys.platform not in {"linux", "darwin"},
+    reason="only Linux and macOS let a plain file take the replacement path",
+)
+def test_in_place_replaces_the_inode(tmp_path: Path) -> None:
+    # The counterpart to every st_ino equality above: without this, a
+    # fallback that fires too eagerly would retire the atomic path unnoticed.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_inode = path.stat().st_ino
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino != original_inode
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "setxattr"), reason="Linux extended attribute APIs required"
+)
+def test_in_place_keeps_the_inode_when_the_acl_copy_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # shutil swallows a refused setxattr, so copystat reports success having
+    # carried no ACL and the replacement would drop it with exit 0. Falling
+    # back to the original inode is what keeps the entry.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    _grant_acl(path)
+    granted = _read_acl(path)
+    original_inode = path.stat().st_ino
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "setxattr", refuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == granted
+    assert path.stat().st_ino == original_inode
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "getxattr"), reason="Linux extended attribute APIs required"
+)
+def test_in_place_keeps_the_inode_when_the_acl_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A refused read is not a report of absence, and the copy suppresses the
+    # same refusal — so an unverifiable ACL keeps its inode rather than being
+    # replaced on the strength of a check that never ran.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    _grant_acl(path)
+    granted = _read_acl(path)
+    original_inode = path.stat().st_ino
+
+    def refuse(*_args: object, **_kwargs: object) -> bytes:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "getxattr", refuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == granted
+    assert path.stat().st_ino == original_inode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")
+def test_in_place_does_not_inherit_the_directory_acl(tmp_path: Path) -> None:
+    # The temporary file is created in the target's own directory, so an
+    # inheriting entry there lands on it. Replacing would hand the file an
+    # access rule it never carried — a 0600 file becoming world-readable.
+    directory = tmp_path / "config"
+    directory.mkdir()
+    path = directory / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    path.chmod(0o600)
+    plain = _read_acl(path)
+    _grant_inheritable_acl(directory)
+    assert _read_acl(path) == plain, "the existing file should be unaffected"
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == plain
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")
+def test_in_place_preserves_access_control_list(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    plain = _read_acl(path)
+    _grant_acl(path)
+    granted = _read_acl(path)
+    # Prove the fixture before trusting the result: a platform that quietly
+    # refused the entry would otherwise report "preserved" having preserved
+    # nothing. Not a skip — the precondition failing is a real failure.
+    assert granted != plain, f"the ACL entry did not attach: {granted!r}"
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == granted
+
+
+def test_only_a_genuine_absence_reads_as_no_acl() -> None:
+    # The security decision behind the probe: a NULL result that means "could
+    # not look" must not be recorded as "nothing to preserve".
+    absent = toml_tidy.cli._ACL_ABSENT_ERRNOS  # pyright: ignore[reportPrivateUsage]
+    assert errno.ENOENT in absent
+    assert errno.ENOTSUP in absent
+    assert errno.EACCES not in absent
+    assert errno.EIO not in absent
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_reports_a_mode_the_kernel_would_not_keep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The net under the check above: if the kernel drops a bit the check
+    # expected to keep, the mode left on the inode is what says so, and the
+    # run has to fail rather than report a success that lost it.
+    path, _source = _setid_fixture(tmp_path)
+    original_chmod = Path.chmod
+
+    def drop_setgid(self: Path, mode: int) -> None:
+        original_chmod(self, mode & ~stat.S_ISGID)
+
+    monkeypatch.setattr(Path, "chmod", drop_setgid)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.skipif(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
 def test_in_place_preserves_setid(tmp_path: Path) -> None:
+    # The replacement path carries the mode across, so the ordinary set-ID
+    # file is sorted with its bits intact.
     path = tmp_path / "config.toml"
     _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
     path.chmod(0o6755)
@@ -371,6 +579,26 @@ def test_in_place_preserves_setid(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_refuses_a_set_id_file_it_would_rewrite(tmp_path: Path) -> None:
+    # A hard link forces the rewrite path, where writing clears the bits from
+    # the first byte and restoring them is not reliably available. Refused
+    # rather than restored, so nothing is written and no bit is lost.
+    path, source = _setid_fixture(tmp_path)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "set-ID" in result.stderr
+    assert path.read_text(encoding="utf-8") == source
     assert stat.S_IMODE(path.stat().st_mode) == 0o6755
 
 

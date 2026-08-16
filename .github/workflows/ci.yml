@@ -10,13 +10,20 @@ permissions:
 
 jobs:
   test:
-    name: Python ${{ matrix.python }} / tomlkit ${{ matrix.tomlkit }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python }} / tomlkit ${{ matrix.tomlkit }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.12", "3.13"]
         tomlkit: [0.15.0, 0.15.1]
+        include:
+          # One macOS entry, not a second full matrix: it is here to exercise
+          # the ctypes ACL probe, which no Linux runner reaches.
+          - os: macos-latest
+            python: "3.13"
+            tomlkit: 0.15.1
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0

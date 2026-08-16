@@ -1,15 +1,22 @@
 """Command-line interface for hierarchical TOML sorting."""
 
+import ctypes
+import ctypes.util
+import errno
 import os
 import re
 import shutil
 import stat
+import sys
 import tomllib
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import typer
 from tomlkit.exceptions import TOMLKitError
@@ -24,6 +31,57 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
 _IS_WINDOWS: Final = os.name == "nt"
+_ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
+# A NULL acl_get_file is both "this file carries none" and "I could not look".
+# Only these two mean the former, and only the former is safe to replace on.
+_ACL_ABSENT_ERRNOS: Final = frozenset({errno.ENOENT, errno.ENOTSUP, errno.EOPNOTSUPP})
+_ACL_XATTR: Final = "system.posix_acl_access"  # where Linux keeps a POSIX ACL
+# The same distinction one API over: only these mean the attribute is absent.
+_XATTR_ABSENT_ERRNOS: Final = frozenset(
+    {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}
+)
+
+
+def _load_acl_probe() -> "Callable[[Path], bool]":
+    """Build the test for an ACL that replacement would not carry over.
+
+    Linux needs none up front: ``shutil.copystat`` copies extended attributes
+    there, which is where a POSIX ACL lives, so the replacement normally keeps
+    it — and :func:`_acl_matches` confirms afterwards that it did. macOS
+    exposes its ACLs through ``acl_get_file`` alone, which the standard
+    library does not wrap, so the check is bound through ``ctypes``.
+
+    Every other POSIX platform answers yes unconditionally. FreeBSD and its
+    relatives do carry ACLs that ``copystat`` drops, but nothing here can
+    exercise them, and a probe written blind is as likely to answer yes for
+    every file — retiring the atomic write — as to answer correctly. Giving
+    up the replacement is the half of that trade that cannot lose anything.
+    """
+    if sys.platform == "linux":
+        return lambda _path: False
+    if sys.platform != "darwin":
+        return lambda _path: True
+
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    acl_get_file = libc.acl_get_file
+    acl_get_file.restype = ctypes.c_void_p
+    acl_get_file.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    acl_free = libc.acl_free
+    acl_free.restype = ctypes.c_int
+    acl_free.argtypes = (ctypes.c_void_p,)
+
+    def has_acl(path: Path) -> bool:
+        _ = ctypes.set_errno(0)
+        acl = cast("int | None", acl_get_file(os.fsencode(path), _ACL_TYPE_EXTENDED))
+        if acl is None:
+            return ctypes.get_errno() not in _ACL_ABSENT_ERRNOS
+        _ = cast("int", acl_free(acl))
+        return True
+
+    return has_acl
+
+
+_HAS_ACL: Final = _load_acl_probe()
 
 
 class _ConfigError(Exception):
@@ -176,10 +234,62 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
-def _write_existing(path: Path, content: str) -> None:
-    """Rewrite an existing inode when replacement cannot preserve security metadata."""
+def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> None:
+    """Rewrite an existing inode when replacement cannot preserve security metadata.
+
+    Refuses a set-user-ID or set-group-ID target outright. Writing clears
+    those bits from the first byte on, and putting them back is not reliably
+    available: it needs ownership the writer need not have, and for
+    set-group-ID a ``chmod`` outside the file's group clears the bit while
+    reporting success. Every restoring version of this ended up able to
+    strip a bit under some caller, so the whole class is declined instead —
+    on the atomic path, where ``shutil.copystat`` carries the mode across
+    intact, these files are still sorted normally.
+    """
+    if target_stat.st_mode & (stat.S_ISUID | stat.S_ISGID):
+        message = "refusing to rewrite a set-ID file in place"
+        raise PermissionError(errno.EPERM, message, str(path))
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)
+
+
+def _read_acl_xattr(
+    path: Path, getxattr: "Callable[[Path, str], bytes]"
+) -> bytes | None:
+    """Return the file's POSIX ACL, or ``None`` when it demonstrably has none.
+
+    Raises when the answer could not be obtained, which is not the same thing
+    as an absence and must not be recorded as one.
+    """
+    try:
+        return getxattr(path, _ACL_XATTR)
+    except OSError as error:
+        if error.errno in _XATTR_ABSENT_ERRNOS:
+            return None
+        raise
+
+
+def _acl_matches(target: Path, copy: Path) -> bool:
+    """Say whether the replacement carries exactly the target's ACL.
+
+    Both directions matter. ``shutil.copystat`` swallows a refused
+    ``setxattr``, so it can report success having carried nothing — and the
+    temporary file is created in the target's own directory, so a default ACL
+    there is inherited onto a replacement whose target had none, handing the
+    file an access rule it never carried. Either way the inode is kept
+    instead.
+    """
+    getxattr = cast("Callable[[Path, str], bytes] | None", vars(os).get("getxattr"))
+    if getxattr is None:
+        # Only macOS reaches here without the attribute API, and its own probe
+        # already found the target ACL-free, so the copy is the open question.
+        # Anywhere else, no API means no way to tell, which is not a yes.
+        return sys.platform == "darwin" and not _HAS_ACL(copy)
+    try:
+        return _read_acl_xattr(target, getxattr) == _read_acl_xattr(copy, getxattr)
+    except OSError:
+        return False
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -191,8 +301,8 @@ def _atomic_write(path: Path, content: str) -> None:
 
     writable_descriptor = os.open(target, os.O_WRONLY)
     os.close(writable_descriptor)
-    if _IS_WINDOWS or target_stat.st_nlink > 1:
-        _write_existing(target, content)
+    if _IS_WINDOWS or target_stat.st_nlink > 1 or _HAS_ACL(target):
+        _write_existing(target, content, target_stat)
         return
 
     temporary_path: Path | None = None
@@ -215,21 +325,20 @@ def _atomic_write(path: Path, content: str) -> None:
                             handle.fileno(), target_stat.st_uid, target_stat.st_gid
                         )
                     except (NotImplementedError, PermissionError):
-                        _write_existing(target, content)
+                        _write_existing(target, content, target_stat)
                         return
 
-                # Ceiling: copystat carries the mode, times and flags but no
-                # POSIX or macOS ACL, so an ACL-guarded target loses its
-                # entries here. Detecting one needs acl_get_file through
-                # ctypes on macOS; until then the rewrite-in-place fallback
-                # stays reserved for hard links and Windows. See issue 11.
                 shutil.copystat(target, temporary_path)
+                if not _acl_matches(target, temporary_path):
+                    _write_existing(target, content, target_stat)
+                    return
+
                 os.utime(temporary_path, None)
                 os.fsync(handle.fileno())
         except PermissionError:
             if temporary_path is not None:
                 raise
-            _write_existing(target, content)
+            _write_existing(target, content, target_stat)
             return
 
         _ = temporary_path.replace(target)
