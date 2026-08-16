@@ -230,15 +230,36 @@ def _apply_linesep(content: str, linesep: str) -> str:
 
 def _write_existing(path: Path, content: str, mode: int) -> None:
     """Rewrite an existing inode when replacement cannot preserve security metadata."""
+    # An unprivileged write clears set-user-ID and set-group-ID, which the
+    # replacement path keeps only because copystat puts the mode back
+    # afterwards. Restoring them can fail — a group-writable target owned by
+    # someone else cannot be chmod'ed at all — so the same call runs first,
+    # as its own permission check, leaving the content untouched when the
+    # restore is not going to work. Asking the operation rather than
+    # modelling who may perform it also keeps this right where a capability
+    # rather than ownership grants it. The mode is the one already on the
+    # inode, so a probe that works changes nothing.
+    restores_setid = bool(mode & (stat.S_ISUID | stat.S_ISGID))
+    if restores_setid:
+        _restore_mode(path, mode)
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)
-    # An unprivileged write clears set-user-ID and set-group-ID. The
-    # replacement path restores them from the copied mode, so without this
-    # every caller here would trade one piece of security metadata for
-    # another. Same inode throughout, so its recorded mode is the one to put
-    # back, and only when there is something to put back.
-    if mode & (stat.S_ISUID | stat.S_ISGID):
-        path.chmod(stat.S_IMODE(mode))
+
+    if restores_setid:
+        _restore_mode(path, mode)
+
+
+def _restore_mode(path: Path, mode: int) -> None:
+    """Put the recorded mode back, and confirm the inode actually took it."""
+    wanted = stat.S_IMODE(mode)
+    path.chmod(wanted)
+    # POSIX has chmod report success while clearing set-group-ID for a caller
+    # outside the file's group, so a zero return is not evidence the bits are
+    # there. Only the mode left on the inode is.
+    if stat.S_IMODE(path.stat().st_mode) != wanted:
+        message = f"cannot restore mode {wanted:04o}"
+        raise PermissionError(errno.EPERM, message, str(path))
 
 
 def _atomic_write(path: Path, content: str) -> None:

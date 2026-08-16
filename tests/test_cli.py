@@ -458,6 +458,64 @@ def test_in_place_preserves_setid_on_a_hard_linked_file(tmp_path: Path) -> None:
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
+def test_in_place_refuses_setid_it_cannot_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A group-writable set-ID file owned by someone else can be written but
+    # not chmod'ed. Discovering that after the write would leave the file
+    # sorted, stripped of the bits, and reported as an error.
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    os.link(path, tmp_path / "linked.toml")
+    path.chmod(0o6755)
+
+    def refuse(self: Path, _mode: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(Path, "chmod", refuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_refuses_setid_the_kernel_silently_drops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # POSIX clears set-group-ID for a caller outside the file's group and
+    # still returns success from chmod, so the return value proves nothing.
+    # Only a non-root owner of a foreign-grouped file reaches this, which no
+    # unprivileged fixture can create — hence the simulation.
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    os.link(path, tmp_path / "linked.toml")
+    path.chmod(0o6755)
+    original_chmod = Path.chmod
+
+    def drop_setgid(self: Path, mode: int) -> None:
+        original_chmod(self, mode & ~stat.S_ISGID)
+
+    monkeypatch.setattr(Path, "chmod", drop_setgid)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
 def test_in_place_preserves_setid(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")

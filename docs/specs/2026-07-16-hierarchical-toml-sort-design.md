@@ -86,6 +86,8 @@ A target carrying an access-control list the replacement cannot reproduce joins 
 
 Rewriting an existing inode restores the target's set-user-ID and set-group-ID bits, which the kernel clears on an unprivileged write. Without that, every path taken to protect one piece of security metadata would discard another.
 
+The restore runs once before the write as well, so a target whose bits cannot be put back is refused with the same configuration error contract while its content is still intact. Success is read from the mode left on the inode rather than from the call's return value, because clearing set-group-ID for a caller outside the file's group is a documented success.
+
 `--in-place` and `--check` are mutually exclusive.
 
 A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.
