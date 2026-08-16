@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `--in-place` dropped a macOS extended ACL from its target, which v0.4.0 introduced by replacing the file with a new inode that `shutil.copystat` cannot carry an ACL onto. A target holding one now takes the same rewrite-in-place path as a hard-linked target, so its entries survive the write; files without an ACL are still replaced atomically.
+
 ## [v0.4.0] — 2026-08-16
 
 ### Changed

@@ -1,15 +1,21 @@
 """Command-line interface for hierarchical TOML sorting."""
 
+import ctypes
+import ctypes.util
 import os
 import re
 import shutil
 import stat
+import sys
 import tomllib
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import typer
 from tomlkit.exceptions import TOMLKitError
@@ -24,6 +30,40 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
 _IS_WINDOWS: Final = os.name == "nt"
+_ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
+
+
+def _load_acl_probe() -> "Callable[[Path], bool]":
+    """Build the test for an ACL that replacement would not carry over.
+
+    Only macOS needs one. ``shutil.copystat`` copies extended attributes on
+    Linux, which is where a POSIX ACL lives, and Windows never reaches the
+    replacement path; macOS exposes its ACLs through ``acl_get_file`` alone,
+    which the standard library does not wrap.
+    """
+    if sys.platform != "darwin":
+        return lambda _path: False
+
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    acl_get_file = libc.acl_get_file
+    acl_get_file.restype = ctypes.c_void_p
+    acl_get_file.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    acl_free = libc.acl_free
+    acl_free.restype = ctypes.c_int
+    acl_free.argtypes = (ctypes.c_void_p,)
+
+    def has_acl(path: Path) -> bool:
+        # A NULL return, with errno ENOENT, is how the library spells "none".
+        acl = cast("int | None", acl_get_file(os.fsencode(path), _ACL_TYPE_EXTENDED))
+        if acl is None:
+            return False
+        _ = cast("int", acl_free(acl))
+        return True
+
+    return has_acl
+
+
+_HAS_ACL: Final = _load_acl_probe()
 
 
 class _ConfigError(Exception):
@@ -191,7 +231,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
     writable_descriptor = os.open(target, os.O_WRONLY)
     os.close(writable_descriptor)
-    if _IS_WINDOWS or target_stat.st_nlink > 1:
+    if _IS_WINDOWS or target_stat.st_nlink > 1 or _HAS_ACL(target):
         _write_existing(target, content)
         return
 
@@ -218,11 +258,6 @@ def _atomic_write(path: Path, content: str) -> None:
                         _write_existing(target, content)
                         return
 
-                # Ceiling: copystat carries the mode, times and flags but no
-                # POSIX or macOS ACL, so an ACL-guarded target loses its
-                # entries here. Detecting one needs acl_get_file through
-                # ctypes on macOS; until then the rewrite-in-place fallback
-                # stays reserved for hard links and Windows. See issue 11.
                 shutil.copystat(target, temporary_path)
                 os.utime(temporary_path, None)
                 os.fsync(handle.fileno())
