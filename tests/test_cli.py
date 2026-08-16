@@ -401,6 +401,7 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
     assert get_xattr(path, attribute) == b"preserved"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="non-Windows atomic replacement required")
 def test_in_place_replaces_the_inode(tmp_path: Path) -> None:
     # The counterpart to every st_ino equality above: without this, a
     # fallback that fires too eagerly would retire the atomic path unnoticed.
