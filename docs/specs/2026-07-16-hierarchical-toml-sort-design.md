@@ -84,6 +84,8 @@ On platforms that expose file ownership, atomic replacement preserves the target
 
 A target carrying an access-control list the replacement cannot reproduce joins hard-linked targets on the rewrite-in-place path, so access granted or denied by an ACL rather than by the permission mode survives the write. On macOS that means any extended ACL: the standard library's metadata copy does not carry one and offers no way to read one, so the check is bound to the platform's own `acl_get_file`. On Linux the same metadata copy already carries a POSIX ACL across as an extended attribute, so nothing is detoured and the write stays atomic there.
 
+Rewriting an existing inode restores the target's set-user-ID and set-group-ID bits, which the kernel clears on an unprivileged write. Without that, every path taken to protect one piece of security metadata would discard another.
+
 `--in-place` and `--check` are mutually exclusive.
 
 A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.

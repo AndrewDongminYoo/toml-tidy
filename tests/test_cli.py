@@ -428,6 +428,26 @@ def test_in_place_preserves_access_control_list(tmp_path: Path) -> None:
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
+def test_in_place_preserves_setid_on_a_hard_linked_file(tmp_path: Path) -> None:
+    # The rewrite-in-place paths share one writer, and an unprivileged write
+    # clears these bits; the hard-link path lost them before the ACL path
+    # existed, so the guard belongs to the writer rather than to one branch.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    os.link(path, tmp_path / "linked.toml")
+    path.chmod(0o6755)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
 def test_in_place_preserves_setid(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")

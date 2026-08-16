@@ -216,10 +216,17 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
-def _write_existing(path: Path, content: str) -> None:
+def _write_existing(path: Path, content: str, mode: int) -> None:
     """Rewrite an existing inode when replacement cannot preserve security metadata."""
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)
+    # An unprivileged write clears set-user-ID and set-group-ID. The
+    # replacement path restores them from the copied mode, so without this
+    # every caller here would trade one piece of security metadata for
+    # another. Same inode throughout, so its recorded mode is the one to put
+    # back, and only when there is something to put back.
+    if mode & (stat.S_ISUID | stat.S_ISGID):
+        path.chmod(stat.S_IMODE(mode))
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -232,7 +239,7 @@ def _atomic_write(path: Path, content: str) -> None:
     writable_descriptor = os.open(target, os.O_WRONLY)
     os.close(writable_descriptor)
     if _IS_WINDOWS or target_stat.st_nlink > 1 or _HAS_ACL(target):
-        _write_existing(target, content)
+        _write_existing(target, content, target_stat.st_mode)
         return
 
     temporary_path: Path | None = None
@@ -255,7 +262,7 @@ def _atomic_write(path: Path, content: str) -> None:
                             handle.fileno(), target_stat.st_uid, target_stat.st_gid
                         )
                     except (NotImplementedError, PermissionError):
-                        _write_existing(target, content)
+                        _write_existing(target, content, target_stat.st_mode)
                         return
 
                 shutil.copystat(target, temporary_path)
@@ -264,7 +271,7 @@ def _atomic_write(path: Path, content: str) -> None:
         except PermissionError:
             if temporary_path is not None:
                 raise
-            _write_existing(target, content)
+            _write_existing(target, content, target_stat.st_mode)
             return
 
         _ = temporary_path.replace(target)

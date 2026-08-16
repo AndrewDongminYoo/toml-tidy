@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - `--in-place` dropped a macOS extended ACL from its target, which v0.4.0 introduced by replacing the file with a new inode that `shutil.copystat` cannot carry an ACL onto. A target holding one now takes the same rewrite-in-place path as a hard-linked target, so its entries survive the write; files without an ACL are still replaced atomically.
+- `--in-place` cleared the set-user-ID and set-group-ID bits of any target it rewrote in place rather than replaced — since v0.4.0 for a hard-linked target, and on Windows. Rewriting now restores them, so a file cannot lose one kind of security metadata on a path taken to preserve another.
 
 ## [v0.4.0] — 2026-08-16
 
