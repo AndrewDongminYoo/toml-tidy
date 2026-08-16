@@ -424,6 +424,16 @@ def test_in_place_preserves_access_control_list(tmp_path: Path) -> None:
     assert _read_acl(path) == granted
 
 
+def test_only_a_genuine_absence_reads_as_no_acl() -> None:
+    # The security decision behind the probe: a NULL result that means "could
+    # not look" must not be recorded as "nothing to preserve".
+    absent = toml_tidy.cli._ACL_ABSENT_ERRNOS  # pyright: ignore[reportPrivateUsage]
+    assert errno.ENOENT in absent
+    assert errno.ENOTSUP in absent
+    assert errno.EACCES not in absent
+    assert errno.EIO not in absent
+
+
 @pytest.mark.skipif(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",

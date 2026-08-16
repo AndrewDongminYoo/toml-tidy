@@ -2,6 +2,7 @@
 
 import ctypes
 import ctypes.util
+import errno
 import os
 import re
 import shutil
@@ -31,18 +32,29 @@ _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
 _IS_WINDOWS: Final = os.name == "nt"
 _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
+# A NULL acl_get_file is both "this file carries none" and "I could not look".
+# Only these two mean the former, and only the former is safe to replace on.
+_ACL_ABSENT_ERRNOS: Final = frozenset({errno.ENOENT, errno.ENOTSUP, errno.EOPNOTSUPP})
 
 
 def _load_acl_probe() -> "Callable[[Path], bool]":
     """Build the test for an ACL that replacement would not carry over.
 
-    Only macOS needs one. ``shutil.copystat`` copies extended attributes on
-    Linux, which is where a POSIX ACL lives, and Windows never reaches the
-    replacement path; macOS exposes its ACLs through ``acl_get_file`` alone,
-    which the standard library does not wrap.
+    Linux needs none: ``shutil.copystat`` copies extended attributes there,
+    which is where a POSIX ACL lives, and the replacement keeps it. macOS
+    exposes its ACLs through ``acl_get_file`` alone, which the standard
+    library does not wrap, so the check is bound through ``ctypes``.
+
+    Every other POSIX platform answers yes unconditionally. FreeBSD and its
+    relatives do carry ACLs that ``copystat`` drops, but nothing here can
+    exercise them, and a probe written blind is as likely to answer yes for
+    every file — retiring the atomic write — as to answer correctly. Giving
+    up the replacement is the half of that trade that cannot lose anything.
     """
-    if sys.platform != "darwin":
+    if sys.platform == "linux":
         return lambda _path: False
+    if sys.platform != "darwin":
+        return lambda _path: True
 
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     acl_get_file = libc.acl_get_file
@@ -53,10 +65,10 @@ def _load_acl_probe() -> "Callable[[Path], bool]":
     acl_free.argtypes = (ctypes.c_void_p,)
 
     def has_acl(path: Path) -> bool:
-        # A NULL return, with errno ENOENT, is how the library spells "none".
+        _ = ctypes.set_errno(0)
         acl = cast("int | None", acl_get_file(os.fsencode(path), _ACL_TYPE_EXTENDED))
         if acl is None:
-            return False
+            return ctypes.get_errno() not in _ACL_ABSENT_ERRNOS
         _ = cast("int", acl_free(acl))
         return True
 
