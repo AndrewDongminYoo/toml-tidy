@@ -448,114 +448,6 @@ def test_only_a_genuine_absence_reads_as_no_acl() -> None:
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
-def test_in_place_preserves_setid_on_a_hard_linked_file(tmp_path: Path) -> None:
-    # The rewrite-in-place paths share one writer, and an unprivileged write
-    # clears these bits; the hard-link path lost them before the ACL path
-    # existed, so the guard belongs to the writer rather than to one branch.
-    path = tmp_path / "config.toml"
-    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
-    os.link(path, tmp_path / "linked.toml")
-    path.chmod(0o6755)
-
-    result = CliRunner().invoke(app, [str(path), "--in-place"])
-
-    assert result.exit_code == 0
-    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or _RUNNING_AS_ROOT,
-    reason="unprivileged POSIX write semantics required",
-)
-def test_in_place_refuses_setid_it_cannot_chmod(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Whatever denies the restore — not owning the target, a squashed root
-    # over NFS, an immutable flag — the attempt is what reports it, and it
-    # has to report before the write rather than after.
-    path, source = _setid_fixture(tmp_path)
-
-    def refuse(self: Path, _mode: int) -> None:
-        raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
-
-    monkeypatch.setattr(Path, "chmod", refuse)
-
-    result = CliRunner().invoke(app, [str(path), "--in-place"])
-
-    assert result.exit_code == 2
-    assert "Traceback" not in result.output
-    assert path.read_text(encoding="utf-8") == source
-    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or _RUNNING_AS_ROOT,
-    reason="unprivileged POSIX write semantics required",
-)
-def test_in_place_refuses_setgid_outside_the_files_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # POSIX clears set-group-ID for a caller outside the file's group and
-    # still returns success, so this one cannot be discovered by trying it.
-    # Only a non-root owner of a foreign-grouped file reaches it, which no
-    # unprivileged fixture can create — hence the simulated group list.
-    path, source = _setid_fixture(tmp_path)
-    foreign_gid = path.stat().st_gid + 1
-    monkeypatch.setattr(os, "getegid", lambda: foreign_gid)
-    monkeypatch.setattr(os, "getgroups", lambda: [foreign_gid])
-    attempts: list[int] = []
-
-    def record(_self: Path, mode: int) -> None:
-        attempts.append(mode)
-
-    monkeypatch.setattr(Path, "chmod", record)
-
-    result = CliRunner().invoke(app, [str(path), "--in-place"])
-
-    assert result.exit_code == 2
-    assert "Traceback" not in result.output
-    assert path.read_text(encoding="utf-8") == source
-    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
-    # The refusal must reach no chmod at all: attempting one here is what
-    # would clear the bit, which is why this case is settled by reading.
-    assert attempts == []
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or _RUNNING_AS_ROOT,
-    reason="unprivileged POSIX write semantics required",
-)
-def test_in_place_refuses_setgid_for_root_outside_the_files_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # An effective UID of zero is not the override; CAP_FSETID is, and a
-    # container can drop it from root. Since that cannot be read portably,
-    # a privileged caller outside the group is refused like any other.
-    path, source = _setid_fixture(tmp_path)
-    foreign_gid = path.stat().st_gid + 1
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(os, "getegid", lambda: foreign_gid)
-    monkeypatch.setattr(os, "getgroups", lambda: [foreign_gid])
-    attempts: list[int] = []
-
-    def record(_self: Path, mode: int) -> None:
-        attempts.append(mode)
-
-    monkeypatch.setattr(Path, "chmod", record)
-
-    result = CliRunner().invoke(app, [str(path), "--in-place"])
-
-    assert result.exit_code == 2
-    assert path.read_text(encoding="utf-8") == source
-    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
-    assert attempts == []
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or _RUNNING_AS_ROOT,
-    reason="unprivileged POSIX write semantics required",
-)
 def test_in_place_reports_a_mode_the_kernel_would_not_keep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -580,50 +472,9 @@ def test_in_place_reports_a_mode_the_kernel_would_not_keep(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
-def test_in_place_restores_setid_after_a_failed_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The first byte written clears the bits, so a write that dies partway
-    # leaves them off. The error is the one worth reporting, but the file
-    # should not quietly shed security metadata on the way to reporting it.
-    path, _source = _setid_fixture(tmp_path)
-    original_open = cast("Callable[..., TextIO]", Path.open)
-
-    class FailingHandle:
-        _handle: TextIO
-
-        def __init__(self, handle: TextIO) -> None:
-            self._handle = handle
-
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self._handle.close()
-
-        def write(self, content: str) -> int:
-            _ = self._handle.write(content[:2])
-            self._handle.flush()
-            raise OSError(errno.ENOSPC, "No space left on device")
-
-    def failing_open(self: Path, mode: str = "r", **kwargs: object) -> object:
-        handle = original_open(self, mode, **kwargs)
-        return handle if "w" not in mode else FailingHandle(handle)
-
-    monkeypatch.setattr(Path, "open", failing_open)
-
-    result = CliRunner().invoke(app, [str(path), "--in-place"])
-
-    assert result.exit_code == 2
-    assert "No space left on device" in result.stderr
-    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or _RUNNING_AS_ROOT,
-    reason="unprivileged POSIX write semantics required",
-)
 def test_in_place_preserves_setid(tmp_path: Path) -> None:
+    # The replacement path carries the mode across, so the ordinary set-ID
+    # file is sorted with its bits intact.
     path = tmp_path / "config.toml"
     _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
     path.chmod(0o6755)
@@ -631,6 +482,26 @@ def test_in_place_preserves_setid(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_refuses_a_set_id_file_it_would_rewrite(tmp_path: Path) -> None:
+    # A hard link forces the rewrite path, where writing clears the bits from
+    # the first byte and restoring them is not reliably available. Refused
+    # rather than restored, so nothing is written and no bit is lost.
+    path, source = _setid_fixture(tmp_path)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "set-ID" in result.stderr
+    assert path.read_text(encoding="utf-8") == source
     assert stat.S_IMODE(path.stat().st_mode) == 0o6755
 
 

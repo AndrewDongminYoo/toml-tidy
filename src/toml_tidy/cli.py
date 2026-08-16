@@ -228,71 +228,24 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
-def _keeps_setgid(target_stat: os.stat_result) -> bool:
-    """Say whether a chmod here would keep set-group-ID rather than drop it.
-
-    This is the one question that cannot be settled by trying, because POSIX
-    answers it by clearing the bit and reporting success. Everything else
-    about the caller's authority — ownership, a squashed root over NFS, a
-    filesystem that refuses outright — is left to the attempt, which is
-    harmless once this has ruled out the destructive case.
-
-    Group membership is the whole test, with no shortcut for an effective
-    UID of zero: what actually overrides it is ``CAP_FSETID``, which a
-    container can drop from root, and which cannot be read portably. So a
-    privileged caller outside the file's group is refused rather than
-    trusted — an error where the alternative is a bit destroyed in silence.
-    """
-    getegid = cast("Callable[[], int] | None", vars(os).get("getegid"))
-    getgroups = cast("Callable[[], list[int]] | None", vars(os).get("getgroups"))
-    if getegid is None or getgroups is None:
-        return True
-    return target_stat.st_gid in {getegid(), *getgroups()}
-
-
 def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> None:
-    """Rewrite an existing inode when replacement cannot preserve security metadata."""
-    # An unprivileged write clears set-user-ID and set-group-ID, which the
-    # replacement path keeps only because copystat puts the mode back
-    # afterwards. A target whose bits could not be put back is refused before
-    # the write, so it keeps both its content and its mode.
-    mode = target_stat.st_mode
-    restores_setid = bool(mode & (stat.S_ISUID | stat.S_ISGID))
-    if restores_setid:
-        if mode & stat.S_ISGID and not _keeps_setgid(target_stat):
-            message = f"cannot restore mode {stat.S_IMODE(mode):04o}"
-            raise PermissionError(errno.EPERM, message, str(path))
-        # Now that the silent-clear case is excluded, restoring the mode the
-        # inode already carries is a no-op when permitted and an error when
-        # not — so the real operation can answer the rest for itself.
-        _restore_mode(path, mode)
+    """Rewrite an existing inode when replacement cannot preserve security metadata.
 
-    try:
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            _ = handle.write(content)
-    except OSError:
-        # The first byte written already cleared the bits, so a write that
-        # fails partway leaves them off. Put them back on the way out, and
-        # never let a failure doing so replace the error being reported.
-        if restores_setid:
-            with suppress(OSError):
-                _restore_mode(path, mode)
-        raise
-
-    if restores_setid:
-        _restore_mode(path, mode)
-
-
-def _restore_mode(path: Path, mode: int) -> None:
-    """Put the recorded mode back, and confirm the inode actually took it."""
-    wanted = stat.S_IMODE(mode)
-    path.chmod(wanted)
-    # POSIX has chmod report success while clearing set-group-ID for a caller
-    # outside the file's group, so a zero return is not evidence the bits are
-    # there. Only the mode left on the inode is.
-    if stat.S_IMODE(path.stat().st_mode) != wanted:
-        message = f"cannot restore mode {wanted:04o}"
+    Refuses a set-user-ID or set-group-ID target outright. Writing clears
+    those bits from the first byte on, and putting them back is not reliably
+    available: it needs ownership the writer need not have, and for
+    set-group-ID a ``chmod`` outside the file's group clears the bit while
+    reporting success. Every restoring version of this ended up able to
+    strip a bit under some caller, so the whole class is declined instead —
+    on the atomic path, where ``shutil.copystat`` carries the mode across
+    intact, these files are still sorted normally.
+    """
+    if target_stat.st_mode & (stat.S_ISUID | stat.S_ISGID):
+        message = "refusing to rewrite a set-ID file in place"
         raise PermissionError(errno.EPERM, message, str(path))
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        _ = handle.write(content)
 
 
 def _atomic_write(path: Path, content: str) -> None:
