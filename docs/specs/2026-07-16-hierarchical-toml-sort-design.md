@@ -82,7 +82,7 @@ On Windows, in-place output rewrites the existing file so its owner and DACL rem
 
 On platforms that expose file ownership, atomic replacement preserves the target's user and group ownership and uses the standard library to copy its permission mode and other supported metadata.
 
-A target carrying an access-control list the replacement cannot reproduce joins hard-linked targets on the rewrite-in-place path, so access granted or denied by an ACL rather than by the permission mode survives the write. On macOS that means any extended ACL: the standard library's metadata copy does not carry one and offers no way to read one, so the check is bound to the platform's own `acl_get_file`.
+A target carrying an access-control list the replacement cannot reproduce joins hard-linked targets on the rewrite-in-place path, so access granted or denied by an ACL rather than by the permission mode survives the write. On macOS that means any extended ACL: the standard library's metadata copy does not carry one and offers no way to read one, so the check is bound to the platform's own `acl_get_file`. On Linux the same metadata copy already carries a POSIX ACL across as an extended attribute, so nothing is detoured and the write stays atomic there.
 
 `--in-place` and `--check` are mutually exclusive.
 
