@@ -173,4 +173,4 @@ CI runs the test suite on every supported Python version and against the lower a
 
 A release is prepared on a `release/vX.Y.Z` branch: bump `project.version`, run `uv lock`, date the CHANGELOG section and add its compare link, and update the pre-commit `rev` above.
 
-**Merge that pull request first, then tag the merge commit and push the tag.** Pushing the tag runs the tests, publishes to PyPI, and creates the GitHub Release from the tagged CHANGELOG section. A tag that is not a merge commit on `main` is refused before anything is published — tagging a branch tip puts the artifact on PyPI before that branch's own review has landed on it, and the commit that was merged does not carry what the review added.
+**Merge that pull request first, then tag the merge commit and push the tag.** Pushing the tag runs the tests, publishes to PyPI, and creates the GitHub Release from the tagged CHANGELOG section. A tag on any commit `main` has never pointed at is refused before anything is published — tagging a branch tip puts the artifact on PyPI before that branch's own review has landed on it, and the commit that was merged does not carry what the review added.
