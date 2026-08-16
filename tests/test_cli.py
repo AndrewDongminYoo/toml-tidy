@@ -62,7 +62,12 @@ def _read_acl(path: Path) -> str:
     completed = subprocess.run(  # noqa: S603
         _acl_command("read", path), check=True, capture_output=True, text=True
     )
-    return completed.stdout
+    if sys.platform != "darwin":
+        return completed.stdout
+    # ls prints the listing before the entries, and it carries the mtime the
+    # write updates — comparing it would fail whenever a run straddles a
+    # displayed minute, with every ACL entry intact.
+    return "".join(completed.stdout.splitlines(keepends=True)[1:])
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -401,7 +406,10 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
     assert get_xattr(path, attribute) == b"preserved"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="non-Windows atomic replacement required")
+@pytest.mark.skipif(
+    sys.platform not in {"linux", "darwin"},
+    reason="only Linux and macOS let a plain file take the replacement path",
+)
 def test_in_place_replaces_the_inode(tmp_path: Path) -> None:
     # The counterpart to every st_ino equality above: without this, a
     # fallback that fires too eagerly would retire the atomic path unnoticed.
@@ -414,6 +422,34 @@ def test_in_place_replaces_the_inode(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert path.stat().st_ino != original_inode
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "setxattr"), reason="Linux extended attribute APIs required"
+)
+def test_in_place_keeps_the_inode_when_the_acl_copy_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # shutil swallows a refused setxattr, so copystat reports success having
+    # carried no ACL and the replacement would drop it with exit 0. Falling
+    # back to the original inode is what keeps the entry.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    _grant_acl(path)
+    granted = _read_acl(path)
+    original_inode = path.stat().st_ino
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "setxattr", refuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == granted
+    assert path.stat().st_ino == original_inode
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")

@@ -35,13 +35,15 @@ _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
 # A NULL acl_get_file is both "this file carries none" and "I could not look".
 # Only these two mean the former, and only the former is safe to replace on.
 _ACL_ABSENT_ERRNOS: Final = frozenset({errno.ENOENT, errno.ENOTSUP, errno.EOPNOTSUPP})
+_ACL_XATTR: Final = "system.posix_acl_access"  # where Linux keeps a POSIX ACL
 
 
 def _load_acl_probe() -> "Callable[[Path], bool]":
     """Build the test for an ACL that replacement would not carry over.
 
-    Linux needs none: ``shutil.copystat`` copies extended attributes there,
-    which is where a POSIX ACL lives, and the replacement keeps it. macOS
+    Linux needs none up front: ``shutil.copystat`` copies extended attributes
+    there, which is where a POSIX ACL lives, so the replacement normally keeps
+    it — and :func:`_acl_reached` confirms afterwards that it did. macOS
     exposes its ACLs through ``acl_get_file`` alone, which the standard
     library does not wrap, so the check is bound through ``ctypes``.
 
@@ -248,6 +250,28 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
         _ = handle.write(content)
 
 
+def _acl_reached(target: Path, copy: Path) -> bool:
+    """Say whether the target's POSIX ACL actually landed on its replacement.
+
+    ``shutil.copystat`` carries a Linux ACL across as an extended attribute,
+    but swallows the ``setxattr`` failure when a policy or mount refuses it —
+    so it can report success having copied nothing. Asked here rather than
+    assumed, since the answer decides whether replacing the inode would drop
+    an access rule.
+    """
+    getxattr = cast("Callable[[Path, str], bytes] | None", vars(os).get("getxattr"))
+    if getxattr is None:
+        return True
+    try:
+        wanted = getxattr(target, _ACL_XATTR)
+    except OSError:
+        return True
+    try:
+        return getxattr(copy, _ACL_XATTR) == wanted
+    except OSError:
+        return False
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Replace a file only after its complete replacement is safely written."""
     target = path.resolve(strict=True)
@@ -285,6 +309,10 @@ def _atomic_write(path: Path, content: str) -> None:
                         return
 
                 shutil.copystat(target, temporary_path)
+                if not _acl_reached(target, temporary_path):
+                    _write_existing(target, content, target_stat)
+                    return
+
                 os.utime(temporary_path, None)
                 os.fsync(handle.fileno())
         except PermissionError:
