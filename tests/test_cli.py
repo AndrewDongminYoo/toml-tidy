@@ -48,6 +48,16 @@ def _grant_acl(path: Path) -> None:
     _ = subprocess.run(_acl_command("grant", path), check=True)  # noqa: S603
 
 
+def _setid_fixture(tmp_path: Path) -> tuple[Path, str]:
+    """A set-ID target on the rewrite-in-place path, and its original content."""
+    path = tmp_path / "config.toml"
+    source = "b = 1\na = 2\n"
+    _ = path.write_text(source, encoding="utf-8")
+    os.link(path, tmp_path / "linked.toml")
+    path.chmod(0o6755)
+    return path, source
+
+
 def _read_acl(path: Path) -> str:
     completed = subprocess.run(  # noqa: S603
         _acl_command("read", path), check=True, capture_output=True, text=True
@@ -458,46 +468,59 @@ def test_in_place_preserves_setid_on_a_hard_linked_file(tmp_path: Path) -> None:
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
-def test_in_place_refuses_setid_it_cannot_restore(
+def test_in_place_refuses_setid_it_does_not_own(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A group-writable set-ID file owned by someone else can be written but
-    # not chmod'ed. Discovering that after the write would leave the file
-    # sorted, stripped of the bits, and reported as an error.
-    path = tmp_path / "config.toml"
-    source = "b = 1\na = 2\n"
-    _ = path.write_text(source, encoding="utf-8")
-    os.link(path, tmp_path / "linked.toml")
-    path.chmod(0o6755)
-
-    def refuse(self: Path, _mode: int) -> None:
-        raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
-
-    monkeypatch.setattr(Path, "chmod", refuse)
+    # chmod needs ownership, so a set-ID target the caller may write but not
+    # own cannot get its bits back. Refusing has to leave the mode alone too,
+    # not only the content — a probing chmod would have been the thing that
+    # stripped it.
+    path, source = _setid_fixture(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: path.stat().st_uid + 1)
 
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 2
     assert "Traceback" not in result.output
     assert path.read_text(encoding="utf-8") == source
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
 
 
 @pytest.mark.skipif(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
-def test_in_place_refuses_setid_the_kernel_silently_drops(
+def test_in_place_refuses_setgid_outside_the_files_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # POSIX clears set-group-ID for a caller outside the file's group and
-    # still returns success from chmod, so the return value proves nothing.
-    # Only a non-root owner of a foreign-grouped file reaches this, which no
-    # unprivileged fixture can create — hence the simulation.
-    path = tmp_path / "config.toml"
-    source = "b = 1\na = 2\n"
-    _ = path.write_text(source, encoding="utf-8")
-    os.link(path, tmp_path / "linked.toml")
-    path.chmod(0o6755)
+    # still returns success, so this one cannot be discovered by trying it.
+    # Only a non-root owner of a foreign-grouped file reaches it, which no
+    # unprivileged fixture can create — hence the simulated group list.
+    path, source = _setid_fixture(tmp_path)
+    foreign_gid = path.stat().st_gid + 1
+    monkeypatch.setattr(os, "getegid", lambda: foreign_gid)
+    monkeypatch.setattr(os, "getgroups", lambda: [foreign_gid])
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert path.read_text(encoding="utf-8") == source
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
+def test_in_place_reports_a_mode_the_kernel_would_not_keep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The net under the check above: if the kernel drops a bit the check
+    # expected to keep, the mode left on the inode is what says so, and the
+    # run has to fail rather than report a success that lost it.
+    path, _source = _setid_fixture(tmp_path)
     original_chmod = Path.chmod
 
     def drop_setgid(self: Path, mode: int) -> None:
@@ -509,7 +532,6 @@ def test_in_place_refuses_setid_the_kernel_silently_drops(
 
     assert result.exit_code == 2
     assert "Traceback" not in result.output
-    assert path.read_text(encoding="utf-8") == source
 
 
 @pytest.mark.skipif(

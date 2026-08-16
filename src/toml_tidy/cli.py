@@ -228,20 +228,42 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
-def _write_existing(path: Path, content: str, mode: int) -> None:
+def _may_restore_mode(target_stat: os.stat_result) -> bool:
+    """Say whether this process could put the target's set-ID bits back.
+
+    Read rather than attempted, because the attempt is not free: chmod on a
+    set-group-ID file by a caller outside the file's group clears that bit
+    and reports success, so a dry run would strip the very bit it is asking
+    about. Ownership and group membership decide it; a capability that
+    grants more is answered no here, which costs a refusal and never a bit.
+    """
+    geteuid = cast("Callable[[], int] | None", vars(os).get("geteuid"))
+    getegid = cast("Callable[[], int] | None", vars(os).get("getegid"))
+    getgroups = cast("Callable[[], list[int]] | None", vars(os).get("getgroups"))
+    if geteuid is None or getegid is None or getgroups is None:
+        return True
+
+    euid = geteuid()
+    if euid == 0:
+        return True
+    if euid != target_stat.st_uid:
+        return False
+    if not target_stat.st_mode & stat.S_ISGID:
+        return True
+    return target_stat.st_gid in {getegid(), *getgroups()}
+
+
+def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> None:
     """Rewrite an existing inode when replacement cannot preserve security metadata."""
     # An unprivileged write clears set-user-ID and set-group-ID, which the
     # replacement path keeps only because copystat puts the mode back
-    # afterwards. Restoring them can fail — a group-writable target owned by
-    # someone else cannot be chmod'ed at all — so the same call runs first,
-    # as its own permission check, leaving the content untouched when the
-    # restore is not going to work. Asking the operation rather than
-    # modelling who may perform it also keeps this right where a capability
-    # rather than ownership grants it. The mode is the one already on the
-    # inode, so a probe that works changes nothing.
+    # afterwards. A target whose bits could not be put back is refused before
+    # the write, so it keeps both its content and its mode.
+    mode = target_stat.st_mode
     restores_setid = bool(mode & (stat.S_ISUID | stat.S_ISGID))
-    if restores_setid:
-        _restore_mode(path, mode)
+    if restores_setid and not _may_restore_mode(target_stat):
+        message = f"cannot restore mode {stat.S_IMODE(mode):04o}"
+        raise PermissionError(errno.EPERM, message, str(path))
 
     with path.open("w", encoding="utf-8", newline="") as handle:
         _ = handle.write(content)
@@ -272,7 +294,7 @@ def _atomic_write(path: Path, content: str) -> None:
     writable_descriptor = os.open(target, os.O_WRONLY)
     os.close(writable_descriptor)
     if _IS_WINDOWS or target_stat.st_nlink > 1 or _HAS_ACL(target):
-        _write_existing(target, content, target_stat.st_mode)
+        _write_existing(target, content, target_stat)
         return
 
     temporary_path: Path | None = None
@@ -295,7 +317,7 @@ def _atomic_write(path: Path, content: str) -> None:
                             handle.fileno(), target_stat.st_uid, target_stat.st_gid
                         )
                     except (NotImplementedError, PermissionError):
-                        _write_existing(target, content, target_stat.st_mode)
+                        _write_existing(target, content, target_stat)
                         return
 
                 shutil.copystat(target, temporary_path)
@@ -304,7 +326,7 @@ def _atomic_write(path: Path, content: str) -> None:
         except PermissionError:
             if temporary_path is not None:
                 raise
-            _write_existing(target, content, target_stat.st_mode)
+            _write_existing(target, content, target_stat)
             return
 
         _ = temporary_path.replace(target)
