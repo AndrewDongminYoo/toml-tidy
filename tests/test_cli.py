@@ -278,6 +278,21 @@ def test_in_place_updates_all_hard_links(tmp_path: Path) -> None:
     assert path.stat().st_ino == linked_path.stat().st_ino
 
 
+def test_in_place_through_symlink_rewrites_the_target(tmp_path: Path) -> None:
+    # Replacement targets the resolved path, so the link keeps pointing at a
+    # file it still names instead of being overwritten by the temporary one.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    link_path = tmp_path / "link.toml"
+    link_path.symlink_to(path)
+
+    result = CliRunner().invoke(app, [str(link_path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert link_path.is_symlink()
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
 @pytest.mark.skipif(not hasattr(os, "fchown"), reason="file ownership API required")
 def test_in_place_sync_failure_preserves_original_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
