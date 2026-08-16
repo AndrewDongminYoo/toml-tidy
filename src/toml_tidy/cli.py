@@ -36,6 +36,10 @@ _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
 # Only these two mean the former, and only the former is safe to replace on.
 _ACL_ABSENT_ERRNOS: Final = frozenset({errno.ENOENT, errno.ENOTSUP, errno.EOPNOTSUPP})
 _ACL_XATTR: Final = "system.posix_acl_access"  # where Linux keeps a POSIX ACL
+# The same distinction one API over: only these mean the attribute is absent.
+_XATTR_ABSENT_ERRNOS: Final = frozenset(
+    {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}
+)
 
 
 def _load_acl_probe() -> "Callable[[Path], bool]":
@@ -264,8 +268,11 @@ def _acl_reached(target: Path, copy: Path) -> bool:
         return True
     try:
         wanted = getxattr(target, _ACL_XATTR)
-    except OSError:
-        return True
+    except OSError as error:
+        # Absent means there is nothing to carry, and replacing is safe.
+        # Unreadable means the check did not run, which is not the same
+        # answer — and the copy suppresses the very failure that produced it.
+        return error.errno in _XATTR_ABSENT_ERRNOS
     try:
         return getxattr(copy, _ACL_XATTR) == wanted
     except OSError:
