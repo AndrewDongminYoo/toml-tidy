@@ -1,7 +1,10 @@
 import errno
+import getpass
 import os
 import re
 import stat
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Self, TextIO, cast
@@ -21,6 +24,35 @@ _INVALID_UTF8 = b"a = \xff\xfe\n"
 _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 _GETEUID = cast("Callable[[], int] | None", vars(os).get("geteuid"))
 _RUNNING_AS_ROOT = _GETEUID is not None and _GETEUID() == 0
+
+
+def _acl_command(verb: str, path: Path) -> list[str]:
+    """Build the platform's grant-an-ACL-entry or print-the-ACL command."""
+    if sys.platform == "darwin":
+        entry = f"{getpass.getuser()} allow delete"
+        return (
+            ["/bin/chmod", "+a", entry, str(path)]
+            if verb == "grant"
+            else ["/bin/ls", "-lde", str(path)]
+        )
+    return (
+        ["/usr/bin/setfacl", "-m", "u:root:rwx", str(path)]
+        if verb == "grant"
+        else ["/usr/bin/getfacl", "-cp", str(path)]
+    )
+
+
+def _grant_acl(path: Path) -> None:
+    # No skip on a missing tool: a precondition that cannot be built is a
+    # failure to report, not a pass to record.
+    _ = subprocess.run(_acl_command("grant", path), check=True)  # noqa: S603
+
+
+def _read_acl(path: Path) -> str:
+    completed = subprocess.run(  # noqa: S603
+        _acl_command("read", path), check=True, capture_output=True, text=True
+    )
+    return completed.stdout
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -357,6 +389,39 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert get_xattr(path, attribute) == b"preserved"
+
+
+def test_in_place_replaces_the_inode(tmp_path: Path) -> None:
+    # The counterpart to every st_ino equality above: without this, a
+    # fallback that fires too eagerly would retire the atomic path unnoticed.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    original_inode = path.stat().st_ino
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert path.stat().st_ino != original_inode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL tooling required")
+def test_in_place_preserves_access_control_list(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    plain = _read_acl(path)
+    _grant_acl(path)
+    granted = _read_acl(path)
+    # Prove the fixture before trusting the result: a platform that quietly
+    # refused the entry would otherwise report "preserved" having preserved
+    # nothing. Not a skip — the precondition failing is a real failure.
+    assert granted != plain, f"the ACL entry did not attach: {granted!r}"
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert _read_acl(path) == granted
 
 
 @pytest.mark.skipif(
