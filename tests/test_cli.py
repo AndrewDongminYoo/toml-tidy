@@ -580,6 +580,49 @@ def test_in_place_reports_a_mode_the_kernel_would_not_keep(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
+def test_in_place_restores_setid_after_a_failed_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The first byte written clears the bits, so a write that dies partway
+    # leaves them off. The error is the one worth reporting, but the file
+    # should not quietly shed security metadata on the way to reporting it.
+    path, _source = _setid_fixture(tmp_path)
+    original_open = cast("Callable[..., TextIO]", Path.open)
+
+    class FailingHandle:
+        _handle: TextIO
+
+        def __init__(self, handle: TextIO) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._handle.close()
+
+        def write(self, content: str) -> int:
+            _ = self._handle.write(content[:2])
+            self._handle.flush()
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    def failing_open(self: Path, mode: str = "r", **kwargs: object) -> object:
+        handle = original_open(self, mode, **kwargs)
+        return handle if "w" not in mode else FailingHandle(handle)
+
+    monkeypatch.setattr(Path, "open", failing_open)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert "No space left on device" in result.stderr
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
 def test_in_place_preserves_setid(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")

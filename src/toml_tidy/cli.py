@@ -267,8 +267,17 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
         # not — so the real operation can answer the rest for itself.
         _restore_mode(path, mode)
 
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        _ = handle.write(content)
+    try:
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            _ = handle.write(content)
+    except OSError:
+        # The first byte written already cleared the bits, so a write that
+        # fails partway leaves them off. Put them back on the way out, and
+        # never let a failure doing so replace the error being reported.
+        if restores_setid:
+            with suppress(OSError):
+                _restore_mode(path, mode)
+        raise
 
     if restores_setid:
         _restore_mode(path, mode)
