@@ -278,6 +278,10 @@ def test_in_place_updates_all_hard_links(tmp_path: Path) -> None:
     assert path.stat().st_ino == linked_path.stat().st_ino
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="symlink creation is privileged on Windows, which rewrites the inode",
+)
 def test_in_place_through_symlink_rewrites_the_target(tmp_path: Path) -> None:
     # Replacement targets the resolved path, so the link keeps pointing at a
     # file it still names instead of being overwritten by the temporary one.
