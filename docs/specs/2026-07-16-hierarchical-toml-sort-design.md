@@ -82,6 +82,8 @@ On Windows, in-place output rewrites the existing file so its owner and DACL rem
 
 On platforms that expose file ownership, atomic replacement preserves the target's user and group ownership and uses the standard library to copy its permission mode and other supported metadata.
 
+Access-control lists are the one exception: the replacement produces a new inode and the standard library copies no POSIX or macOS ACL onto it, so a target whose access is granted or denied by an ACL rather than by its permission mode loses that entry. The paths that rewrite the existing inode — hard-linked targets and Windows — are unaffected. Tracked as issue 11.
+
 `--in-place` and `--check` are mutually exclusive.
 
 A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.

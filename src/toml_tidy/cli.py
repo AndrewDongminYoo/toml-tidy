@@ -218,6 +218,11 @@ def _atomic_write(path: Path, content: str) -> None:
                         _write_existing(target, content)
                         return
 
+                # Ceiling: copystat carries the mode, times and flags but no
+                # POSIX or macOS ACL, so an ACL-guarded target loses its
+                # entries here. Detecting one needs acl_get_file through
+                # ctypes on macOS; until then the rewrite-in-place fallback
+                # stays reserved for hard links and Windows. See issue 11.
                 shutil.copystat(target, temporary_path)
                 os.utime(temporary_path, None)
                 os.fsync(handle.fileno())

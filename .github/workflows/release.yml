@@ -21,6 +21,17 @@ jobs:
 
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
+      # Both halves the release job reads are checked here, so a changelog
+      # omission fails before anything is published rather than after.
+      - name: Check the CHANGELOG documents the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          grep -q "^## \[$TAG\]" CHANGELOG.md \
+            || { echo "::error::CHANGELOG has no '## [$TAG]' section"; exit 1; }
+          grep -q "^\[$TAG\]: " CHANGELOG.md \
+            || { echo "::error::CHANGELOG has no '[$TAG]: ' compare link"; exit 1; }
+
       - name: Run tests
         run: uv run --frozen pytest -q
 
@@ -50,3 +61,31 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish
+
+  # Runs after the artifacts are on PyPI, holds the only write access to
+  # repository contents, and runs no project code — the notes come from the
+  # tagged CHANGELOG, which is the single source for a release's contents.
+  github-release:
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes=$(awk -v t="$TAG" \
+            'index($0, "## [" t "]") == 1 { f = 1; print; next } f && /^## \[/ { exit } f' \
+            CHANGELOG.md)
+          test -n "$notes" || { echo "::error::no CHANGELOG section for $TAG"; exit 1; }
+          url=$(grep -m1 "^\[$TAG\]: " CHANGELOG.md | cut -d' ' -f2-)
+          printf '%s\n\n**Full Changelog**: %s\n' "$notes" "$url" > "$RUNNER_TEMP/notes.md"
+          # --verify-tag: gh creates a missing tag from the default branch,
+          # so a tag deleted while the publish environment was pending would
+          # come back here pointing at unrelated source.
+          gh release create "$TAG" --verify-tag \
+            --title "🔖 Release $TAG" --notes-file "$RUNNER_TEMP/notes.md"
