@@ -24,12 +24,13 @@ jobs:
       # same-day v0.4.1 for three defects found afterwards, as v0.3.0 had
       # before it. Merge first, then tag the merge commit. A tag anywhere
       # else stops here, ahead of the build and well ahead of the upload.
-      - name: Refuse a tag that is not on the default branch
+      - name: Refuse a tag that is not a merge commit on the default branch
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ github.event.repository.default_branch }}
         run: |
-          state=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$GITHUB_SHA" --jq .status)
+          api="repos/$GITHUB_REPOSITORY"
+          state=$(gh api "$api/compare/$BASE...$GITHUB_SHA" --jq .status)
           case "$state" in
             identical | behind) ;;
             *)
@@ -38,6 +39,17 @@ jobs:
               exit 1
               ;;
           esac
+          # Reachability alone is not the rule. A tag pushed on the release
+          # commit is refused while its branch is open, and then becomes an
+          # ancestor the moment that branch merges — so re-running the very
+          # run this guard stopped would publish that commit, without
+          # whatever the review added on top of it. The merge commit is the
+          # one that carries both.
+          if [ "$(gh api "$api/commits/$GITHUB_SHA" --jq '.parents | length')" -lt 2 ]; then
+            echo "::error::$GITHUB_REF_NAME has a single parent;" \
+              "tag the merge commit, not the commit that was merged"
+            exit 1
+          fi
 
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
