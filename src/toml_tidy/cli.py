@@ -233,16 +233,19 @@ def _keeps_setgid(target_stat: os.stat_result) -> bool:
 
     This is the one question that cannot be settled by trying, because POSIX
     answers it by clearing the bit and reporting success. Everything else
-    about the caller's authority — ownership, capabilities, a squashed root
-    over NFS, a filesystem that refuses outright — is left to the attempt,
-    which is harmless once this has ruled out the destructive case.
+    about the caller's authority — ownership, a squashed root over NFS, a
+    filesystem that refuses outright — is left to the attempt, which is
+    harmless once this has ruled out the destructive case.
+
+    Group membership is the whole test, with no shortcut for an effective
+    UID of zero: what actually overrides it is ``CAP_FSETID``, which a
+    container can drop from root, and which cannot be read portably. So a
+    privileged caller outside the file's group is refused rather than
+    trusted — an error where the alternative is a bit destroyed in silence.
     """
-    geteuid = cast("Callable[[], int] | None", vars(os).get("geteuid"))
     getegid = cast("Callable[[], int] | None", vars(os).get("getegid"))
     getgroups = cast("Callable[[], list[int]] | None", vars(os).get("getgroups"))
-    if geteuid is None or getegid is None or getgroups is None:
-        return True
-    if geteuid() == 0:
+    if getegid is None or getgroups is None:
         return True
     return target_stat.st_gid in {getegid(), *getgroups()}
 

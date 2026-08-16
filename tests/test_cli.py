@@ -526,6 +526,36 @@ def test_in_place_refuses_setgid_outside_the_files_group(
     os.name != "posix" or _RUNNING_AS_ROOT,
     reason="unprivileged POSIX write semantics required",
 )
+def test_in_place_refuses_setgid_for_root_outside_the_files_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An effective UID of zero is not the override; CAP_FSETID is, and a
+    # container can drop it from root. Since that cannot be read portably,
+    # a privileged caller outside the group is refused like any other.
+    path, source = _setid_fixture(tmp_path)
+    foreign_gid = path.stat().st_gid + 1
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getegid", lambda: foreign_gid)
+    monkeypatch.setattr(os, "getgroups", lambda: [foreign_gid])
+    attempts: list[int] = []
+
+    def record(_self: Path, mode: int) -> None:
+        attempts.append(mode)
+
+    monkeypatch.setattr(Path, "chmod", record)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert path.read_text(encoding="utf-8") == source
+    assert stat.S_IMODE(path.stat().st_mode) == 0o6755
+    assert attempts == []
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or _RUNNING_AS_ROOT,
+    reason="unprivileged POSIX write semantics required",
+)
 def test_in_place_reports_a_mode_the_kernel_would_not_keep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
