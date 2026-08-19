@@ -1,5 +1,14 @@
 # toml-tidy
 
+![Abstract TOML sorting transformation](.github/assets/readme-hero.png)
+
+[![CI](https://github.com/AndrewDongminYoo/toml-tidy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AndrewDongminYoo/toml-tidy/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/toml-tidy)](https://pypi.org/project/toml-tidy/)
+[![Supported Python versions](https://img.shields.io/pypi/pyversions/toml-tidy)](https://pypi.org/project/toml-tidy/)
+[![MIT license](https://img.shields.io/pypi/l/toml-tidy)](LICENSE)
+[![pre-commit integration](https://img.shields.io/badge/integration-pre--commit-FAB040?logo=precommit&logoColor=white)](#pre-commit)
+[![Trunk integration](https://img.shields.io/badge/integration-Trunk-4F46E5)](#trunk)
+
 Sort TOML keys while preserving table hierarchy and source formatting where `tomlkit` supports it.
 
 ## Install
