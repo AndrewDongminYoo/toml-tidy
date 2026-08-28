@@ -122,7 +122,10 @@ Standalone comments move with the following key or table declaration.
 
 Whitespace between entries remains after the preceding entry, and trailing whitespace remains at its table boundary, unless `--blank-lines` is enabled.
 
-Inline comments, value formatting, and key quoting remain attached to their parsed `tomlkit` items.
+Inline comments and key quoting remain attached to their parsed `tomlkit` items.
+
+Every non-empty single-line array uses one space after `[` and before `]`.
+Empty and multi-line arrays keep their source layout.
 
 Keys inside inline tables are not reordered.
 

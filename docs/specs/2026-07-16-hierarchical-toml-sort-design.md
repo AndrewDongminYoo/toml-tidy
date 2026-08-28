@@ -56,7 +56,11 @@ Unknown keys in `[tool.toml-tidy]` are invalid and report the same configuration
 
 The implementation parses source with `tomlkit` and serializes the same document object after reordering its parsed container body.
 
-Each sortable key is moved together with its `tomlkit` key and item objects so quoted spelling, inline comments, value formatting, and item-level trivia remain attached.
+Each sortable key is moved together with its `tomlkit` key and item objects so quoted spelling, inline comments, and item-level trivia remain attached.
+
+Every non-empty single-line array uses one space after `[` and before `]`.
+This rule applies recursively to nested arrays.
+Empty and multi-line arrays retain their source layout.
 
 Standalone comments are assigned to the following sortable key and move with that key, while blank lines between entries remain after the preceding entry.
 
