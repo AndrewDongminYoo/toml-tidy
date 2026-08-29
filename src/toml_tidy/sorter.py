@@ -2,11 +2,11 @@
 
 import re
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
 
 import tomlkit
 from tomlkit.container import Container
-from tomlkit.items import AoT, Comment, Item, Key, Table, Whitespace
+from tomlkit.items import AoT, Array, Comment, InlineTable, Item, Key, Table, Whitespace
 
 type BodyEntry = tuple[Key | None, Item]
 type SegmentKind = Literal["key", "table"]
@@ -75,9 +75,62 @@ def _sort_document(
     run before that rebuild for the same reason.
     """
     _sort_container(container, order, scope, first)
+    _normalize_inline_array_whitespace(container)
     if blank_lines:
         _normalize_blank_lines(container, separate_first=False, followed=False)
     _restore_maps(container)
+
+
+def _normalize_inline_array_whitespace(container: Container) -> None:
+    """Use one edge space in every non-empty single-line array."""
+    for _, item in container.body:
+        match item:
+            case Array() as array:
+                for value in cast("list[Item]", array):
+                    _normalize_inline_array_item(value)
+                _normalize_array_edges(array)
+            case InlineTable():
+                _normalize_inline_array_whitespace(item.value)
+            case Table():
+                _normalize_inline_array_whitespace(item.value)
+            case AoT():
+                for table in item.body:
+                    _normalize_inline_array_whitespace(table.value)
+            case _:
+                continue
+
+
+def _normalize_inline_array_item(item: Item) -> None:
+    """Normalize an array nested inside another array."""
+    match item:
+        case Array() as array:
+            for value in cast("list[Item]", array):
+                _normalize_inline_array_item(value)
+            _normalize_array_edges(array)
+        case InlineTable():
+            _normalize_inline_array_whitespace(item.value)
+        case _:
+            pass
+
+
+def _normalize_array_edges(array: Array) -> None:
+    """Set edge spaces without changing an array's contents or line layout."""
+    if not array or "\n" in array.as_string():
+        return
+
+    items = list(
+        array._iter_items()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    )
+    while items and isinstance(items[0], Whitespace) and "," not in items[0].s:
+        del items[0]
+    while items and isinstance(items[-1], Whitespace) and "," not in items[-1].s:
+        _ = items.pop()
+    array._value = (  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+        array._group_values(  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+            [Whitespace(" "), *items, Whitespace(" ")]
+        )
+    )
+    _ = array._reindex()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
 
 
 def _normalize_blank_lines(

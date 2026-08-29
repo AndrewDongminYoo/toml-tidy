@@ -80,6 +80,40 @@ def test_sort_toml_when_natural_order_is_selected() -> None:
     assert result == "item1 = 1\nitem2 = 2\nitem10 = 10\n"
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('value = ["x"]\n', 'value = [ "x" ]\n'),
+        ('value = [ "x"]\n', 'value = [ "x" ]\n'),
+        ('value = ["x" ]\n', 'value = [ "x" ]\n'),
+        ('value = ["x"]\r\n', 'value = [ "x" ]\r\n'),
+    ],
+)
+def test_sort_toml_normalizes_single_line_array_edge_whitespace(
+    source: str, expected: str
+) -> None:
+    result = sort_toml(source)
+
+    assert result == expected
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_normalizes_nested_single_line_array_edge_whitespace() -> None:
+    source = 'value = [["x"]]\n'
+    result = sort_toml(source)
+
+    assert result == 'value = [ [ "x" ] ]\n'
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_preserves_multiline_array_layout() -> None:
+    source = "value = [\n  { name = \"token\", pattern = '\\btoken\\b' },\n]\n"
+
+    assert sort_toml(source) == source
+
+
 def test_sort_toml_when_quoted_key_has_logical_order() -> None:
     source = '[plugins]\n"omo-kit" = 1\nomo = 2\n'
 
