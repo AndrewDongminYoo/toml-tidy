@@ -1,5 +1,5 @@
 version: "0.2"
-ignorePaths: []
+ignorePaths: [.gitignore, .trunk/trunk.yaml]
 dictionaryDefinitions:
   - name: custom-dictionary
     path: ./.cspell/custom-dictionary.txt

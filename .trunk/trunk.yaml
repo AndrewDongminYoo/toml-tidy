@@ -22,6 +22,9 @@ lint:
   disabled:
     - bandit
     - pinact
+  ignore:
+    - linters: [trufflehog]
+      paths: [tests/test_cli.py]
   enabled:
     - oxipng@9.1.5
     - actionlint@1.7.12
