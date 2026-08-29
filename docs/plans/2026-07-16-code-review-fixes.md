@@ -47,7 +47,7 @@ Do not compare raw source spelling.
 ## Task 2: Missing trailing newline must not produce invalid TOML
 
 **Finding (CONFIRMED):** `sorter.py:105`.
-The last entry of a file without a trailing newline has no newline trivia; when sorting moves it earlier, the following key is glued onto the same line: `sort_toml('b = 1\na = 2')` → `'a = 2b = 1\n'`, which is unparseable (`Invalid number`).
+The last entry of a file without a trailing newline has no newline trivia; when sorting moves it earlier, the following key is glued onto the same line: `sort_toml('b = 1\na = 2')` → `'a = 2b = 1\n'`, which is unparsable (`Invalid number`).
 `--in-place` would overwrite the user's file with broken TOML.
 
 **Fix direction:** normalize in `sort_toml` after parsing: when the source does not end with a newline, ensure the final meaningful body item's trail gains a `"\n"` before segment sorting runs (or equivalently guarantee every reordered entry carries a trailing newline).

@@ -5,6 +5,10 @@ dictionaryDefinitions:
     path: ./.cspell/custom-dictionary.txt
     addWords: true
 dictionaries:
+  - en-gb
+  - python
+  - python-common
+  - posix-errno
   - custom-dictionary
 words: []
 ignoreWords: []
