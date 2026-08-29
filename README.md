@@ -78,7 +78,7 @@ Unknown keys in `[tool.toml-tidy]` are rejected so configuration typos cannot si
 ```yaml
 repos:
   - repo: https://github.com/AndrewDongminYoo/toml-tidy
-    rev: v0.4.1 # pin the latest release; the hook ships from v0.2.0 onward
+    rev: v0.5.0 # pin the latest release; the hook ships from v0.2.0 onward
     hooks:
       - id: toml-tidy
 ```
