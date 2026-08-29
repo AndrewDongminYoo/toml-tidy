@@ -21,9 +21,6 @@ runtimes:
 lint:
   disabled:
     - bandit
-  ignore:
-    - linters: [trufflehog]
-      paths: [tests/test_cli.py]
   enabled:
     - pinact@4.0.0
     - oxipng@9.1.5

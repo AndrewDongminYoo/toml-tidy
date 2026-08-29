@@ -136,7 +136,9 @@ def test_command_when_invalid_toml_does_not_mutate_file(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == source
 
 
-def test_non_utf8_file_exits_with_error_code(tmp_path: Path) -> None:
+def test_non_utf8_file_exits_with_error_code(  # trufflehog:ignore
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_bytes(_INVALID_UTF8)
     runner = CliRunner()
@@ -817,7 +819,9 @@ def test_scope_option_keys_leaves_tables_unsorted(tmp_path: Path) -> None:
     assert result.output == "[z]\na = 2\nb = 1\n[y]\nk = 1\n"
 
 
-def test_config_order_is_read_from_pyproject(tmp_path: Path) -> None:
+def test_config_order_is_read_from_pyproject(  # trufflehog:ignore
+    tmp_path: Path,
+) -> None:
     _ = (tmp_path / "pyproject.toml").write_text(
         '[tool.toml-tidy]\norder = "alpha"\n', encoding="utf-8"
     )
@@ -845,7 +849,9 @@ def test_cli_order_flag_overrides_config(tmp_path: Path) -> None:
     assert result.output == "item2 = 1\nitem10 = 2\n"
 
 
-def test_config_scope_is_read_from_pyproject(tmp_path: Path) -> None:
+def test_config_scope_is_read_from_pyproject(  # trufflehog:ignore
+    tmp_path: Path,
+) -> None:
     _ = (tmp_path / "pyproject.toml").write_text(
         '[tool.toml-tidy]\nscope = "tables"\n', encoding="utf-8"
     )
