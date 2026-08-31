@@ -180,7 +180,7 @@ def _expand_wide_arrays(
         match item:
             case Array() as array if key is not None and array:
                 if _rendered_width(prefix, key, array) > line_width:
-                    _ = array.multiline(multiline=True)
+                    _expand_array(array)
             case Table() if key is not None and key.is_dotted():
                 _expand_wide_arrays(
                     item.value, line_width, f"{prefix}{key.as_string()}."
@@ -192,6 +192,35 @@ def _expand_wide_arrays(
                     _expand_wide_arrays(table.value, line_width)
             case _:
                 continue
+
+
+def _expand_array(array: Array) -> None:
+    r"""Lay an array out one value per line, in that line's own ending.
+
+    tomlkit's ``Array.multiline(True)`` is not usable here: its renderer
+    hard-codes "\n", so a CRLF document comes back with bare LF inside every
+    expanded array, and the CLI's mixed-ending path hands such a document
+    straight through. Building the whitespace run instead reproduces exactly
+    what tomlkit parses a multi-line array into, with the ending the source
+    actually uses. The ending comes from the array's own trivia rather than
+    an enclosing wrapper, which is what keeps a dotted key-value correct:
+    the wrapper's trail is a bare newline while the value carries the CRLF.
+    """
+    newline = "\r\n" if array.trivia.trail.endswith("\r\n") else "\n"
+    indent = array.trivia.indent
+    rebuilt: list[Item] = []
+    items = array._iter_items()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    for item in items:
+        if isinstance(item, Whitespace):
+            continue
+        rebuilt.extend((Whitespace(f"{newline}{indent}    "), item, Whitespace(",")))
+    rebuilt.append(Whitespace(f"{newline}{indent}"))
+    array._value = (  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+        array._group_values(  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+            rebuilt,
+        )
+    )
+    _ = array._reindex()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
 
 
 def _rendered_width(prefix: str, key: Key, array: Array) -> int:

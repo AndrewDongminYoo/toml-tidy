@@ -746,3 +746,28 @@ def test_sort_toml_never_expands_empty_array() -> None:  # trufflehog:ignore
     source = "value = []\n"
 
     assert sort_toml(source, line_width=1) == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "value = [1,2]\r\n",
+        "[t]\r\n  value = [1,2]\r\n",
+        "a.value = [1,2]\r\n",
+        "[[u]]\r\nvalue = [1,2]\r\n",
+    ],
+)
+def test_sort_toml_expands_arrays_in_the_source_line_ending(source: str) -> None:
+    result = sort_toml(source, line_width=1)
+
+    assert "\n" not in result.replace("\r\n", ""), "expansion inserted a bare LF"
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result, line_width=1) == result
+
+
+def test_sort_toml_expands_a_mixed_ending_document_per_line() -> None:
+    # The CLI hands mixed sources through unnormalized, so each array has to
+    # take the ending of the line it sits on.
+    result = sort_toml("a = 1\nvalue = [1,2]\r\n", line_width=1)
+
+    assert result == "a = 1\nvalue = [\r\n    1,\r\n    2,\r\n]\r\n"
