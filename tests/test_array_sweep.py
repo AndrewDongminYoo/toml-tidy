@@ -62,8 +62,20 @@ def _boundary_widths(source: str) -> list[int]:
     return sorted({w for n in lengths for w in (n - 1, n, n + 1) if w > 0})
 
 
+def _assert_line_endings(source: str, result: str) -> None:
+    """Assert expansion did not introduce an ending the source never had.
+
+    The array-line assertions cannot see this: an expanded array matches no
+    whole-line pattern, so a bare LF spliced into a CRLF document passes
+    every other property here. That is how it shipped past a CRLF sweep.
+    """
+    if "\r\n" in source and "\n" not in source.replace("\r\n", ""):
+        assert "\n" not in result.replace("\r\n", ""), "bare LF in a CRLF document"
+
+
 def _assert_layout(source: str, result: str, width: int | None) -> None:
     assert tomllib.loads(result) == tomllib.loads(source)
+    _assert_line_endings(source, result)
     for line in _array_lines(result):
         body = line[line.index("=") + 1 :].strip()
         if body == "[]":
