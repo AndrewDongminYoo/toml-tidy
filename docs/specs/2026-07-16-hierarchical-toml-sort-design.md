@@ -63,6 +63,12 @@ A trailing comma retains its place at the end of the array.
 This rule applies recursively to nested arrays.
 Empty and multi-line arrays retain their source layout.
 
+The opt-in `line-width` setting expands a single-line array when the line it renders on, including indentation and the key, exceeds the configured column count.
+A comment trailing the array is excluded from that measurement, because expanding the array relocates the comment without shortening it.
+Only an array that is the direct value of a key is measured, since only that array occupies a line of its own; arrays nested inside another array or an inline table share their parent's line.
+Expansion never runs in reverse, and an array already spanning several lines is never measured, so a second run over expanded output changes nothing.
+An empty array is never expanded because doing so cannot shorten its line.
+
 Standalone comments are assigned to the following sortable key and move with that key, while blank lines between entries remain after the preceding entry.
 
 Comments directly before a table declaration move with that declaration when sibling tables are reordered.
@@ -101,12 +107,15 @@ Unit tests cover alpha and natural ordering, case-insensitive tie behavior, recu
 
 CLI tests cover standard output, check-mode exit codes, in-place rewriting, invalid TOML without mutation, multi-path aggregation, and `[tool.toml-tidy]` configuration resolution including CLI override and invalid values.
 
+Array spacing and `line-width` expansion are additionally checked by a permutation sweep over block shapes, option combinations, and line endings, asserting idempotence, unchanged parsed data, and the spacing and width properties against the dumped text rather than the measuring code.
+The sweep derives widths from each fixture's own rendered line lengths so every array line becomes a boundary case; fixed widths alone left an off-by-one in the measurement undetected.
+
 The test fixtures assert exact serialized output for preservation-sensitive cases and parse the output again to confirm valid TOML.
 
 ## Non-Goals
 
 The first release does not reorder array elements or keys inside inline tables.
 
-It does not normalize whitespace inside inline tables.
+It does not join a multi-line array back onto one line, and it does not normalize whitespace inside inline tables.
 
 It does not claim byte-for-byte preservation for every TOML construct beyond the covered `tomlkit` behavior.

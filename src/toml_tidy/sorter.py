@@ -30,13 +30,14 @@ class Scope(StrEnum):
     KEYS = "keys"
 
 
-def sort_toml(
+def sort_toml(  # noqa: PLR0913
     source: str,
     order: OrderMode = OrderMode.NATURAL,
     scope: Scope = Scope.ALL,
     first: tuple[str, ...] = (),
     *,
     blank_lines: bool = False,
+    line_width: int | None = None,
 ) -> str:
     """Return source with direct keys sorted recursively.
 
@@ -44,23 +45,28 @@ def sort_toml(
     listed name, in listed order, ahead of their sorted siblings; it never
     applies inside nested tables. ``blank_lines`` additionally normalizes
     blank lines to exactly one before every table header and none elsewhere.
+    ``line_width`` expands single-line arrays whose rendered line is wider
+    than the given column count; ``None`` leaves every array's layout alone.
     """
     # A trailing lone "\r" is invalid TOML; appending "\n" would turn it into
     # a valid CRLF line instead of letting the parser reject it.
     if source and not source.endswith(("\n", "\r")):
         source += "\n"
     document = tomlkit.parse(source)
-    _sort_document(document, order, scope, first, blank_lines=blank_lines)
+    _sort_document(
+        document, order, scope, first, blank_lines=blank_lines, line_width=line_width
+    )
     return tomlkit.dumps(document)
 
 
-def _sort_document(
+def _sort_document(  # noqa: PLR0913
     container: Container,
     order: OrderMode,
     scope: Scope = Scope.ALL,
     first: tuple[str, ...] = (),
     *,
     blank_lines: bool = False,
+    line_width: int | None = None,
 ) -> None:
     """Sort a container's tree, then restore key-to-index map consistency.
 
@@ -73,9 +79,14 @@ def _sort_document(
     rebuild has to run once, after every mutation in the tree is done.
     Blank-line normalization also adds and drops body entries, so it has to
     run before that rebuild for the same reason.
+
+    Array expansion runs after spacing normalization so the measured width
+    is the width the normalized array actually renders at.
     """
     _sort_container(container, order, scope, first)
     _normalize_inline_array_whitespace(container)
+    if line_width is not None:
+        _expand_wide_arrays(container, line_width)
     if blank_lines:
         _normalize_blank_lines(container, separate_first=False, followed=False)
     _restore_maps(container)
@@ -128,9 +139,8 @@ def _normalize_array_spacing(array: Array) -> None:
 
     rebuilt: list[Item] = [Whitespace(" ")]
     separator_pending = False
-    for (
-        item
-    ) in array._iter_items():  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    items = array._iter_items()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    for item in items:
         if isinstance(item, Whitespace):
             separator_pending = separator_pending or "," in item.s
             continue
@@ -147,6 +157,55 @@ def _normalize_array_spacing(array: Array) -> None:
         )
     )
     _ = array._reindex()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+
+
+def _expand_wide_arrays(
+    container: Container, line_width: int, prefix: str = ""
+) -> None:
+    """Expand every single-line array whose own line exceeds ``line_width``.
+
+    Only an array that is the direct value of a key gets measured, because
+    only that array occupies a line of its own. Arrays nested inside another
+    array or an inline table share their parent's line and are left alone,
+    and an array already spanning several lines is never rejoined, so a
+    single expanding pass reaches a fixed point. An empty array is skipped
+    because expanding it cannot make its line any shorter.
+
+    ``prefix`` carries the leading segments of a dotted key. A dotted
+    key-value parses as a ``Table`` wrapper that renders no header of its
+    own, so ``a.b = [...]`` reaches this walk as key ``b`` one level down and
+    would otherwise be measured two columns short.
+    """
+    for key, item in container.body:
+        match item:
+            case Array() as array if key is not None and array:
+                if _rendered_width(prefix, key, array) > line_width:
+                    _ = array.multiline(multiline=True)
+            case Table() if key is not None and key.is_dotted():
+                _expand_wide_arrays(
+                    item.value, line_width, f"{prefix}{key.as_string()}."
+                )
+            case Table():
+                _expand_wide_arrays(item.value, line_width)
+            case AoT():
+                for table in item.body:
+                    _expand_wide_arrays(table.value, line_width)
+            case _:
+                continue
+
+
+def _rendered_width(prefix: str, key: Key, array: Array) -> int:
+    """Measure an array's line, excluding any comment trailing the value.
+
+    The trailing comment is excluded deliberately: expanding the array moves
+    the comment but cannot shorten it, so counting it would expand arrays
+    that the expansion could not bring under the limit. The indent sits on
+    the innermost item even for a dotted key, so it leads the whole line.
+    """
+    rendered = array.as_string()
+    if "\n" in rendered:
+        return 0
+    return len(array.trivia.indent + prefix + key.as_string() + key.sep + rendered)
 
 
 def _normalize_blank_lines(

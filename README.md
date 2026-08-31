@@ -56,6 +56,8 @@ With multiple paths the worst exit code wins: `2` for any error, else `1` for an
 
 `--blank-lines` additionally normalizes blank lines to exactly one before every table header and none anywhere else; `--no-blank-lines` (the default) leaves every blank line where it was.
 
+`--line-width` expands single-line arrays whose line would be wider than the given column count; with no value set, every array keeps its own layout.
+
 ## Configuration
 
 Defaults can be set in the nearest `pyproject.toml` found walking up from each target file, under `[tool.toml-tidy]`.
@@ -67,6 +69,7 @@ order = "natural"   # or "alpha"
 scope = "all"       # "tables" | "keys"
 first = ["project", "build-system"]
 blank-lines = false # true normalizes blank lines
+line-width = 88     # omit to leave array layout alone
 ```
 
 `first` pins top-level entries by name, in the listed order, ahead of their sorted siblings; it never applies inside nested tables, and it has no CLI flag.
@@ -129,6 +132,17 @@ A trailing comma keeps its place at the end of the array.
 Empty and multi-line arrays keep their source layout.
 
 Keys inside inline tables are not reordered.
+
+## Line width
+
+`--line-width` (config: `line-width = 88`) is unset by default and runs after sorting.
+It only ever expands an array onto several lines; it never joins a multi-line array back into one.
+
+- An array is measured as the whole line it renders on, including indentation and the key, and is expanded when that line exceeds the given width.
+- A comment trailing the array is not counted, because expanding the array moves the comment but cannot shorten it.
+- Only an array that is the direct value of a key is measured, since only that array occupies a line of its own. Arrays nested inside another array or an inline table share their parent's line and are left alone.
+- An array that already spans several lines is never measured or rejoined, so a second run changes nothing.
+- An empty array is never expanded, because doing so cannot make its line shorter.
 
 ## Blank lines
 

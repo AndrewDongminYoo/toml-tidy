@@ -682,3 +682,67 @@ def test_sort_toml_normalizes_single_line_array_separators(
 
 def test_sort_toml_keeps_empty_array_untouched() -> None:
     assert sort_toml("value = []\n") == "value = []\n"
+
+
+def test_sort_toml_without_line_width_keeps_long_array_on_one_line() -> None:
+    source = 'value = [ "aaaa", "bbbb", "cccc" ]\n'
+
+    assert sort_toml(source) == source
+
+
+def test_sort_toml_expands_array_wider_than_line_width() -> None:
+    source = 'value = [ "aaaa", "bbbb", "cccc" ]\n'
+
+    result = sort_toml(source, line_width=20)
+
+    assert result == 'value = [\n    "aaaa",\n    "bbbb",\n    "cccc",\n]\n'
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result, line_width=20) == result
+
+
+def test_sort_toml_keeps_array_at_exactly_line_width() -> None:
+    source = "value = [ 1, 2 ]\n"
+    assert len(source.rstrip("\n")) == 16
+
+    assert sort_toml(source, line_width=16) == source
+    assert sort_toml(source, line_width=15) != source
+
+
+def test_sort_toml_counts_indent_toward_line_width() -> None:
+    source = "[t]\n  value = [ 1, 2 ]\n"
+
+    assert sort_toml(source, line_width=18) == source
+    assert sort_toml(source, line_width=17) != source
+
+
+def test_sort_toml_leaves_multiline_array_untouched_under_line_width() -> None:
+    source = "value = [\n    1,\n    2,\n]\n"
+
+    assert sort_toml(source, line_width=80) == source
+
+
+def test_sort_toml_ignores_trailing_comment_for_line_width() -> None:
+    source = "value = [ 1, 2 ]  # a very long trailing comment goes here\n"
+
+    assert sort_toml(source, line_width=30) == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "a.b = [ 1, 2 ]\n",
+        "[t]\n  a.b = [ 1, 2 ]\n",
+        "a . b = [ 1, 2 ]\n",
+    ],
+)
+def test_sort_toml_counts_dotted_key_prefix_toward_line_width(source: str) -> None:
+    width = len(source.splitlines()[-1])
+
+    assert sort_toml(source, line_width=width) == source
+    assert sort_toml(source, line_width=width - 1) != source
+
+
+def test_sort_toml_never_expands_empty_array() -> None:  # trufflehog:ignore
+    source = "value = []\n"
+
+    assert sort_toml(source, line_width=1) == source
