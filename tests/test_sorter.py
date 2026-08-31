@@ -657,3 +657,28 @@ def test_blank_lines_reuses_crlf_after_a_dotted_key() -> None:
     result = sort_toml("z.y = 1\r\n[t]\r\nq = 1\r\n", blank_lines=True)
 
     assert result == "z.y = 1\r\n\r\n[t]\r\nq = 1\r\n"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("value = [1,2]\n", "value = [ 1, 2 ]\n"),
+        ("value = [1 ,  2]\n", "value = [ 1, 2 ]\n"),
+        ("value = [ 1, 2 ]\n", "value = [ 1, 2 ]\n"),
+        ("value = [1, 2,]\n", "value = [ 1, 2, ]\n"),
+        ("value = [1,2]\r\n", "value = [ 1, 2 ]\r\n"),
+        ("value = [[1,2],[3,4]]\n", "value = [ [ 1, 2 ], [ 3, 4 ] ]\n"),
+    ],
+)
+def test_sort_toml_normalizes_single_line_array_separators(
+    source: str, expected: str
+) -> None:
+    result = sort_toml(source)
+
+    assert result == expected
+    assert tomlkit.parse(result).unwrap() == tomlkit.parse(source).unwrap()
+    assert sort_toml(result) == result
+
+
+def test_sort_toml_keeps_empty_array_untouched() -> None:
+    assert sort_toml("value = []\n") == "value = []\n"

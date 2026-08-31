@@ -88,7 +88,7 @@ def _normalize_inline_array_whitespace(container: Container) -> None:
             case Array() as array:
                 for value in cast("list[Item]", array):
                     _normalize_inline_array_item(value)
-                _normalize_array_edges(array)
+                _normalize_array_spacing(array)
             case InlineTable():
                 _normalize_inline_array_whitespace(item.value)
             case Table():
@@ -106,28 +106,44 @@ def _normalize_inline_array_item(item: Item) -> None:
         case Array() as array:
             for value in cast("list[Item]", array):
                 _normalize_inline_array_item(value)
-            _normalize_array_edges(array)
+            _normalize_array_spacing(array)
         case InlineTable():
             _normalize_inline_array_whitespace(item.value)
         case _:
             pass
 
 
-def _normalize_array_edges(array: Array) -> None:
-    """Set edge spaces without changing an array's contents or line layout."""
+def _normalize_array_spacing(array: Array) -> None:
+    """Set edge and separator spaces without changing an array's contents.
+
+    Whitespace between an array's values carries the commas, so the run is
+    rebuilt rather than edited: every separator renders as ``", "`` and each
+    edge as one space. A trailing comma keeps its position at the end. Only
+    single-line arrays qualify, which is also what keeps this safe against
+    comments: a ``#`` runs to end of line, so a comment inside an array
+    always forces the closing bracket onto another line.
+    """
     if not array or "\n" in array.as_string():
         return
 
-    items = list(
-        array._iter_items()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
-    )
-    while items and isinstance(items[0], Whitespace) and "," not in items[0].s:
-        del items[0]
-    while items and isinstance(items[-1], Whitespace) and "," not in items[-1].s:
-        _ = items.pop()
+    rebuilt: list[Item] = [Whitespace(" ")]
+    separator_pending = False
+    for (
+        item
+    ) in array._iter_items():  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+        if isinstance(item, Whitespace):
+            separator_pending = separator_pending or "," in item.s
+            continue
+        if separator_pending:
+            rebuilt.extend((Whitespace(","), Whitespace(" ")))
+            separator_pending = False
+        rebuilt.append(item)
+    if separator_pending:
+        rebuilt.append(Whitespace(","))
+    rebuilt.append(Whitespace(" "))
     array._value = (  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
         array._group_values(  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
-            [Whitespace(" "), *items, Whitespace(" ")]
+            rebuilt,
         )
     )
     _ = array._reindex()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001

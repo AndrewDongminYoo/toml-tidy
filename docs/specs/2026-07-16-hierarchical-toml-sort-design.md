@@ -58,7 +58,8 @@ The implementation parses source with `tomlkit` and serializes the same document
 
 Each sortable key is moved together with its `tomlkit` key and item objects so quoted spelling, inline comments, and item-level trivia remain attached.
 
-Every non-empty single-line array uses one space after `[` and before `]`.
+Every non-empty single-line array uses one space after `[` and before `]`, one space after each separating comma, and none before it.
+A trailing comma retains its place at the end of the array.
 This rule applies recursively to nested arrays.
 Empty and multi-line arrays retain their source layout.
 
@@ -105,5 +106,7 @@ The test fixtures assert exact serialized output for preservation-sensitive case
 ## Non-Goals
 
 The first release does not reorder array elements or keys inside inline tables.
+
+It does not normalize whitespace inside inline tables.
 
 It does not claim byte-for-byte preservation for every TOML construct beyond the covered `tomlkit` behavior.

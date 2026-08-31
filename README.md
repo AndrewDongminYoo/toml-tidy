@@ -124,7 +124,8 @@ Whitespace between entries remains after the preceding entry, and trailing white
 
 Inline comments and key quoting remain attached to their parsed `tomlkit` items.
 
-Every non-empty single-line array uses one space after `[` and before `]`.
+Every non-empty single-line array uses one space after `[` and before `]`, and one space after each separating comma with none before it.
+A trailing comma keeps its place at the end of the array.
 Empty and multi-line arrays keep their source layout.
 
 Keys inside inline tables are not reordered.
