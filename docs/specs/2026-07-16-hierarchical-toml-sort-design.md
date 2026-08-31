@@ -69,6 +69,8 @@ Only an array that is the direct value of a key is measured, since only that arr
 Expansion never runs in reverse, and an array already spanning several lines is never measured, so a second run over expanded output changes nothing.
 An empty array is never expanded because doing so cannot shorten its line.
 
+An expanded array is laid out in the line ending of the line it occupies, taken from the array's own trivia, so a CRLF or mixed-ending document retains its endings.
+
 Standalone comments are assigned to the following sortable key and move with that key, while blank lines between entries remain after the preceding entry.
 
 Comments directly before a table declaration move with that declaration when sibling tables are reordered.

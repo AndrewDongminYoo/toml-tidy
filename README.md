@@ -143,6 +143,7 @@ It only ever expands an array onto several lines; it never joins a multi-line ar
 - Only an array that is the direct value of a key is measured, since only that array occupies a line of its own. Arrays nested inside another array or an inline table share their parent's line and are left alone.
 - An array that already spans several lines is never measured or rejoined, so a second run changes nothing.
 - An empty array is never expanded, because doing so cannot make its line shorter.
+- An expanded array reuses the line ending of the line it sits on, so a CRLF or mixed-ending document keeps its endings.
 
 ## Blank lines
 
