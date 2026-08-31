@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.0] — 2026-08-31
+
+### Added
+
+- `--line-width` (config: `line-width`) expands a single-line array when the line it renders on exceeds the given column count, counting indentation and the key but not a comment trailing the value.
+- The option is unset by default, only ever expands, and never rejoins a multi-line array, so running it twice changes nothing.
+- An expanded array reuses the line ending of the line it sits on, so a CRLF or mixed-ending document keeps its endings.
+
+### Changed
+
+- Single-line array normalization now covers separators as well as brackets: one space after each comma, none before it, and a trailing comma keeps its place at the end.
+- A file that `--check` reported as clean under v0.5.0 can therefore report a diff under this release.
+
 ## [v0.5.0] — 2026-08-29
 
 ### Changed
@@ -74,6 +87,7 @@ Initial release.
 - Robust error contract: parse, encoding, filesystem, and recursion errors report `{path}: {message}` on stderr with exit code `2` and no traceback.
 - Python 3.12+ support, MIT license.
 
+[v0.6.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.5.0...v0.6.0
 [v0.5.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.4.1...v0.5.0
 [v0.4.1]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.4.0...v0.4.1
 [v0.4.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.3.1...v0.4.0
