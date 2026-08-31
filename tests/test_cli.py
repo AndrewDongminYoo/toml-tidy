@@ -1039,3 +1039,84 @@ def test_non_boolean_blank_lines_config_exits_with_error(tmp_path: Path) -> None
 
     assert result.exit_code == 2
     assert "blank-lines must be a boolean" in result.output
+
+
+_WIDE_ARRAY = 'value = [ "aaaa", "bbbb", "cccc" ]\n'
+_EXPANDED_ARRAY = 'value = [\n    "aaaa",\n    "bbbb",\n    "cccc",\n]\n'
+
+
+def test_line_width_flag_expands_wide_array(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text(_WIDE_ARRAY, encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--line-width", "20"])
+
+    assert result.exit_code == 0
+    assert result.stdout == _EXPANDED_ARRAY
+
+
+def test_line_width_defaults_to_leaving_arrays_alone(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text(_WIDE_ARRAY, encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.stdout == _WIDE_ARRAY
+
+
+def test_line_width_config_expands_wide_array(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        "[tool.toml-tidy]\nline-width = 20\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text(_WIDE_ARRAY, encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.stdout == _EXPANDED_ARRAY
+
+
+def test_line_width_flag_overrides_config(tmp_path: Path) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        "[tool.toml-tidy]\nline-width = 20\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text(_WIDE_ARRAY, encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--line-width", "80"])
+
+    assert result.exit_code == 0
+    assert result.stdout == _WIDE_ARRAY
+
+
+@pytest.mark.parametrize("value", ['"80"', "0", "-1", "true"])
+def test_invalid_line_width_config_exits_with_error(tmp_path: Path, value: str) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        f"[tool.toml-tidy]\nline-width = {value}\n", encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert "line-width must be a positive integer" in result.output
+
+
+def test_line_width_normalizes_separators_before_measuring(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    # 22 source columns, but 24 once the separators gain their spaces.
+    _ = path.write_text("value = [ 1,2,3,4,5,6 ]\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--line-width", "23"])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("value = [\n")

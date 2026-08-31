@@ -29,7 +29,9 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
     "multiple paths require --in-place or --check; stdout output takes one path"
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
-_CONFIG_KEYS: Final = frozenset({"order", "scope", "first", "blank-lines"})
+_CONFIG_KEYS: Final = frozenset(
+    {"order", "scope", "first", "blank-lines", "line-width"}
+)
 _IS_WINDOWS: Final = os.name == "nt"
 _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
 # A NULL acl_get_file is both "this file carries none" and "I could not look".
@@ -93,6 +95,7 @@ class _Settings(NamedTuple):
     scope: Scope
     first: tuple[str, ...]
     blank_lines: bool
+    line_width: int | None
 
 
 def _as_table(value: object) -> dict[str, object]:
@@ -122,6 +125,7 @@ def _resolve_settings(
     order: OrderMode | None,
     scope: Scope | None,
     blank_lines: bool | None,
+    line_width: int | None,
 ) -> _Settings:
     """Merge CLI flags over the nearest pyproject's ``[tool.toml-tidy]`` table.
 
@@ -170,9 +174,11 @@ def _resolve_settings(
         scope = _parse_enum(scope_raw, Scope, "scope", pyproject)
     if blank_lines is None:
         blank_lines = _parse_bool(section.get("blank-lines", False), pyproject)
+    if line_width is None:
+        line_width = _parse_line_width(section.get("line-width"), pyproject)
     first = _parse_first(section.get("first", []), pyproject)
 
-    return _Settings(order, scope, first, blank_lines)
+    return _Settings(order, scope, first, blank_lines, line_width)
 
 
 def _parse_enum[E: StrEnum](
@@ -194,6 +200,16 @@ def _parse_bool(value: object, pyproject: Path | None) -> bool:
     if isinstance(value, bool):
         return value
     message = f"{pyproject}: blank-lines must be a boolean, got {value!r}"
+    raise _ConfigError(message)
+
+
+def _parse_line_width(value: object, pyproject: Path | None) -> int | None:
+    if value is None:
+        return None
+    # bool is an int subclass, so `line-width = true` would otherwise pass.
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    message = f"{pyproject}: line-width must be a positive integer, got {value!r}"
     raise _ConfigError(message)
 
 
@@ -363,6 +379,7 @@ def sort_file(
     blank_lines: Annotated[
         bool | None, typer.Option("--blank-lines/--no-blank-lines")
     ] = None,
+    line_width: Annotated[int | None, typer.Option("--line-width", min=1)] = None,
 ) -> None:
     """Sort TOML keys while preserving table hierarchy."""
     if in_place and check:
@@ -383,6 +400,7 @@ def sort_file(
                 order=order,
                 scope=scope,
                 blank_lines=blank_lines,
+                line_width=line_width,
             ),
         )
     if exit_code:
@@ -397,10 +415,11 @@ def _process_file(
     order: OrderMode | None,
     scope: Scope | None,
     blank_lines: bool | None,
+    line_width: int | None,
 ) -> int:
     """Sort one file and return its exit code (0 ok, 1 check diff, 2 error)."""
     try:
-        settings = _resolve_settings(path, order, scope, blank_lines)
+        settings = _resolve_settings(path, order, scope, blank_lines, line_width)
     except _ConfigError as error:
         typer.echo(str(error), err=True)
         return 2
@@ -419,6 +438,7 @@ def _process_file(
             settings.scope,
             settings.first,
             blank_lines=settings.blank_lines,
+            line_width=settings.line_width,
         )
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
         typer.echo(f"{path}: {error}", err=True)
