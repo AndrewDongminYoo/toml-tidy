@@ -19,6 +19,12 @@ runtimes:
     - python@3.14.4
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
+  files:
+    - name: uv-lockfile
+      filenames: [uv.lock]
+  definitions:
+    - name: osv-scanner
+      files: [lockfile, uv-lockfile]
   disabled:
     - bandit
   enabled:
