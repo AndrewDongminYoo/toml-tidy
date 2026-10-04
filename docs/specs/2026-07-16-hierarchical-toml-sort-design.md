@@ -38,6 +38,24 @@ For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and 
 
 `--scope all` is the default and sorts both segment kinds; `--scope tables` sorts only sibling table declarations, and `--scope keys` sorts only direct key entries, each leaving the other segment kind in source order.
 
+## Python API Contract
+
+`toml_tidy.sorter.sort_toml` leaves argument-domain validation to its caller for every parameter:
+
+| Parameter     | Caller-supplied domain                                   |
+| ------------- | -------------------------------------------------------- |
+| `source`      | A `str` containing TOML source; parser errors propagate. |
+| `order`       | `OrderMode.NATURAL` or `OrderMode.ALPHA`.                |
+| `scope`       | `Scope.ALL`, `Scope.TABLES`, or `Scope.KEYS`.            |
+| `first`       | A tuple of strings naming top-level entries to pin.      |
+| `blank_lines` | A `bool`.                                                |
+| `line_width`  | `None` or a positive integer, excluding `bool`.          |
+
+The function performs no runtime argument validation and guarantees no particular behavior or exception for values outside these domains.
+Type annotations and static checking help typed callers, but `int | None` cannot enforce positivity or exclude Python's `bool` subclass of `int`.
+Callers must check those constraints themselves when accepting external input.
+The CLI continues to validate its own flags and configuration; this library contract adds no runtime checks or new exception behavior.
+
 ## Configuration
 
 Per-file defaults come from the `[tool.toml-tidy]` table of the nearest `pyproject.toml` found walking up from each target file; the first `pyproject.toml` found wins whether or not it contains the table.
