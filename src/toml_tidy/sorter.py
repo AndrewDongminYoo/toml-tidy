@@ -41,6 +41,16 @@ def sort_toml(  # noqa: PLR0913
 ) -> str:
     """Return source with direct keys sorted recursively.
 
+    Argument domains are the caller's responsibility; this function does not
+    validate them at runtime. Pass ``source`` as a TOML string, ``order`` as an
+    ``OrderMode``, ``scope`` as a ``Scope``, ``first`` as a tuple of strings,
+    and ``blank_lines`` as a bool. ``line_width`` must be ``None`` or a positive
+    integer excluding bool. Type annotations help typed callers, but do not
+    enforce positivity or exclude bool from int. Behavior for arguments outside
+    these domains is unspecified; no particular exception is guaranteed.
+    The CLI validates its own flag and configuration inputs separately. TOML
+    parsing errors still propagate from the parser.
+
     ``first`` pins top-level entries whose leading key segment matches a
     listed name, in listed order, ahead of their sorted siblings; it never
     applies inside nested tables. ``blank_lines`` additionally normalizes
