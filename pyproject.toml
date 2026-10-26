@@ -73,6 +73,8 @@ ignore = [
 # down to the per-file worker, so both grow past the argument-count limit.
 "src/toml_tidy/cli.py" = ["PLR0913", "PLR0917"]
 "tests/**/*.py" = ["ARG", "D", "PLR2004", "S101", "SLF001"]
+# Standalone scripts run by path, never imported, so they need no package.
+"scripts/*.py" = ["INP001"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
