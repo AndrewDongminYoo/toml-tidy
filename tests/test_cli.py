@@ -6,9 +6,10 @@ import stat
 import subprocess
 import sys
 import tomllib
+from collections import Counter
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TYPE_CHECKING, NamedTuple, Self, TextIO, cast
+from typing import TYPE_CHECKING, BinaryIO, NamedTuple, Self, TextIO, cast
 
 import pytest
 from typer.testing import CliRunner
@@ -1377,6 +1378,138 @@ def test_unsearchable_user_config_dir_falls_back_to_the_defaults(
 
     assert result.exit_code == 0, result.stderr
     assert result.output == _NATURAL
+
+
+def _count_config_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[Path]:
+    """Count every configuration parse, keyed by the file that was read."""
+    reads: Counter[Path] = Counter()
+    original_load = tomllib.load
+
+    def counting_load(handle: BinaryIO) -> dict[str, object]:
+        reads[Path(handle.name)] += 1
+        return original_load(handle)
+
+    monkeypatch.setattr(tomllib, "load", counting_load)
+    return reads
+
+
+def _count_probes(
+    monkeypatch: pytest.MonkeyPatch, directory: Path, *, deny: str | None = None
+) -> Counter[Path]:
+    """Count ``is_file`` probes in ``directory``, raising for the name ``deny``."""
+    probes: Counter[Path] = Counter()
+    original_is_file = Path.is_file
+
+    def counting_probe(self: Path) -> bool:
+        if self.parent == directory:
+            probes[self] += 1
+            if self.name == deny:
+                raise PermissionError(13, "Permission denied", str(self))
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", counting_probe)
+    return probes
+
+
+def test_each_config_file_is_read_once_per_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(tmp_path / "toml-tidy.toml", _ALPHA_CONFIG)
+    # Skipped for lacking the table, but it still has to be read to know that.
+    skipped = _write(tmp_path / "a" / "pyproject.toml", '[project]\nname = "a"\n')
+    targets = [
+        _write(tmp_path / directory / f"config{index}.toml", _NATURAL)
+        for directory in ("a", "b", "b/c")
+        for index in range(5)
+    ]
+    reads = _count_config_reads(monkeypatch)
+
+    result = CliRunner().invoke(app, [*map(str, targets), "--check"])
+
+    assert result.exit_code == 1, result.stderr
+    assert result.stderr == ""
+    assert reads == {config.resolve(): 1, skipped.resolve(): 1}
+
+
+def test_user_config_is_looked_up_and_read_once_per_invocation(
+    tmp_path: Path, user_dirs: _UserDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_dir = user_dirs.config_home / "toml-tidy"
+    user_config = _write(user_dir / "toml-tidy.toml", _ALPHA_CONFIG)
+    targets = [
+        _write(tmp_path / directory / f"config{index}.toml", _NATURAL)
+        for directory in "xy"
+        for index in range(2)
+    ]
+    reads = _count_config_reads(monkeypatch)
+    probes = _count_probes(monkeypatch, user_dir)
+
+    result = CliRunner().invoke(app, [*map(str, targets), "--check"])
+
+    assert result.exit_code == 1, result.stderr
+    assert result.stderr == ""
+    assert reads == {user_config: 1}
+    # One lookup probes each name up to the first that exists.
+    assert probes == {user_dir / ".toml-tidy.toml": 1, user_config: 1}
+
+
+def test_config_read_error_is_reported_for_every_affected_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(tmp_path / "bad" / "toml-tidy.toml", "order =\n")
+    affected = [
+        _write(tmp_path / "bad" / name, "a = 1\n")
+        for name in ("one.toml", "two.toml", "sub/three.toml")
+    ]
+    fixable = _write(tmp_path / "good" / "fixable.toml", "b = 1\na = 2\n")
+    reads = _count_config_reads(monkeypatch)
+
+    result = CliRunner().invoke(
+        app, [*map(str, affected[:2]), str(fixable), str(affected[2]), "--in-place"]
+    )
+
+    assert result.exit_code == 2
+    lines = result.stderr.splitlines()
+    assert len(lines) == len(affected)
+    assert all(line.startswith(f"{config}: ") for line in lines)
+    assert "Traceback" not in result.output
+    assert reads[config.resolve()] == 1
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
+def test_config_probe_error_names_each_affected_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad_dir = (tmp_path / "bad").resolve()
+    affected = [_write(bad_dir / name, "a = 1\n") for name in ("one.toml", "two.toml")]
+    fixable = _write(tmp_path / "good" / "fixable.toml", "b = 1\na = 2\n")
+    probes = _count_probes(monkeypatch, bad_dir, deny="pyproject.toml")
+
+    result = CliRunner().invoke(
+        app, [str(affected[0]), str(fixable), str(affected[1]), "--in-place"]
+    )
+
+    assert result.exit_code == 2
+    lines = result.stderr.splitlines()
+    assert len(lines) == len(affected)
+    for line, target in zip(lines, affected, strict=True):
+        assert line.startswith(f"{target}: ")
+        assert "Permission denied" in line
+    assert "Traceback" not in result.output
+    assert probes[bad_dir / "pyproject.toml"] == 1
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
+def test_discovery_does_not_carry_over_between_invocations(tmp_path: Path) -> None:
+    config = _write(tmp_path / "toml-tidy.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "config.toml", _NATURAL)
+    runner = CliRunner()
+
+    first = runner.invoke(app, [str(path)])
+    _ = config.write_text('order = "natural"\n', encoding="utf-8")
+    second = runner.invoke(app, [str(path)])
+
+    assert (first.output, second.output) == (_ALPHA, _NATURAL)
 
 
 def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:
