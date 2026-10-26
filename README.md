@@ -65,7 +65,7 @@ CLI flags always override the configuration.
 
 ```toml
 [tool.toml-tidy]
-order = "natural"   # or "alpha"
+order = "natural"   # "alpha" | "version"
 scope = "all"       # "tables" | "keys"
 first = ["project", "build-system"]
 blank-lines = false # true normalizes blank lines
@@ -108,7 +108,10 @@ See the [official Trunk plugin definition](https://github.com/trunk-io/plugins/t
 
 `alpha` uses case-insensitive lexical order.
 
-Both modes compare TOML's parsed logical key, not source quoting.
+`version` follows the [Rust style guide's version sorting](https://doc.rust-lang.org/nightly/style-guide/index.html#sorting) as rustfmt implements it, the order used for Cargo manifests.
+Unlike `natural`, it is case-sensitive, so `B` precedes `a`; each `_` sorts right after a space and before any other character, as the guide states rather than first as rustfmt does, so `item_a` precedes `item1`; only ASCII digits form numbers; and among equal numbers the one with more leading zeros comes first, so `v00` precedes `v0`.
+
+All modes compare TOML's parsed logical key, not source quoting.
 
 Dotted keys such as `b.a = 2` sort with their sibling direct keys by their parsed dotted path, segment by segment, so `a` precedes `b.a`, which precedes `b.z`.
 

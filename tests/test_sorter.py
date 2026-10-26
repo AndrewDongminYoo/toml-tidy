@@ -6,6 +6,47 @@ from toml_tidy import sorter
 from toml_tidy.sorter import OrderMode, Scope, sort_toml
 
 _sort_document = sorter._sort_document  # pyright: ignore[reportPrivateUsage]
+_sort_key = sorter._sort_key  # pyright: ignore[reportPrivateUsage]
+
+# The Rust style guide's version-sorting example, in its required order.
+# ``ZY_XW`` appears twice, so the list is sorted directly, not as a document.
+_STYLE_GUIDE_VERSION_ORDER = (
+    "_ZYXW",
+    "_abcd",
+    "A2",
+    "ABCD",
+    "Z_YXW",
+    "ZY_XW",
+    "ZY_XW",
+    "ZYXW",
+    "ZYXW_",
+    "a1",
+    "abcd",
+    "u_zzz",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "u256",
+    "ua",
+    "usize",
+    "uz",
+    "v000",
+    "v00",
+    "v0",
+    "v0s",
+    "v00t",
+    "v0u",
+    "v001",
+    "v01",
+    "v1",
+    "v009",
+    "v09",
+    "v9",
+    "v010",
+    "v10",
+)
 
 _INVARIANT_DOCUMENTS = (
     'z = 1\na.b = 2\n"quoted key" = 3\n',
@@ -463,6 +504,122 @@ def test_sort_toml_when_numeric_runs_have_leading_zeros() -> None:
 
     assert result == "item0 = 3\nitem9 = 2\nitem010 = 1\n"
     assert sort_toml(result) == result
+
+
+def _version_sorted(keys: list[str]) -> list[str]:
+    return sorted(keys, key=lambda key: _sort_key(key, OrderMode.VERSION))
+
+
+def test_version_order_matches_style_guide_example() -> None:
+    expected = list(_STYLE_GUIDE_VERSION_ORDER)
+    shuffled = [*reversed(expected[::2]), *expected[1::2]]
+    assert shuffled != expected
+
+    assert _version_sorted(shuffled) == expected
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        # Vectors from rustfmt's own ``version_sort`` tests (src/sort.rs).
+        ["", "a", "b"],
+        ["x7x", "xxx"],
+        ["x0x", "xéx", "x๙x"],
+        ["apple", "applesauce"],
+        ["aaa_a", "aaaaa"],
+        ["AAA1A", "AAAAA", "BB_BB", "BBBBB", "C3CCC"],
+        ["1_000_000", "1_010_001"],
+        [
+            "5",
+            "5_000",
+            "5_005",
+            "5_050",
+            "5_500",
+            "50",
+            "50_000",
+            "50_005",
+            "50_050",
+            "50_500",
+            "500",
+        ],
+        ["X86_64", "X86_128", "x86_64", "x86_128"],
+        ["_", "__"],
+        ["foo", "foo_"],
+        ["A", "AA", "B", "a", "aA", "aa", "b"],
+        ["w005s09t", "w5s009t"],
+        # Only the first leading-zero mismatch counts, not the total zeros.
+        ["v01_1", "v1_001"],
+        # A number against text at the same chunk compares source text, so
+        # text starting below "0" precedes a number and letters follow it.
+        ["_1v", "_v1"],
+        ["-a", "1", "a"],
+    ],
+)
+def test_version_order_matches_rustfmt_vectors(expected: list[str]) -> None:
+    assert _version_sorted(list(reversed(expected))) == expected
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        # The style guide puts "_" immediately after " ", where rustfmt
+        # (which never sees a space in an identifier) puts "_" first.
+        [" a", "_a"],
+        ["a b", "a_b"],
+        ["\x01", " ", "_", "!", "1", "a"],
+    ],
+)
+def test_version_order_sorts_underscore_right_after_space(
+    expected: list[str],
+) -> None:
+    assert _version_sorted(list(reversed(expected))) == expected
+
+
+def test_sort_toml_when_version_order_sorts_space_before_underscore() -> None:
+    source = 'a_b = 2\n"a b" = 1\n'
+
+    result = sort_toml(source, OrderMode.VERSION)
+
+    assert result == '"a b" = 1\na_b = 2\n'
+    assert sort_toml(result, OrderMode.VERSION) == result
+
+
+def test_version_order_compares_huge_numeric_runs_without_int_conversion() -> None:
+    big = "9" * 5000
+
+    assert _version_sorted([f"v{big}0", f"v{big}", "v1"]) == [
+        "v1",
+        f"v{big}",
+        f"v{big}0",
+    ]
+
+
+def test_sort_toml_when_version_order_sorts_direct_keys() -> None:
+    source = "b = 1\nv0 = 2\na1 = 3\nB = 4\nv00 = 5\na_z = 6\n"
+
+    result = sort_toml(source, OrderMode.VERSION)
+
+    assert result == "B = 4\na_z = 6\na1 = 3\nb = 1\nv00 = 5\nv0 = 2\n"
+    assert sort_toml(source) == "a1 = 3\na_z = 6\nB = 4\nb = 1\nv0 = 2\nv00 = 5\n"
+    assert sort_toml(result, OrderMode.VERSION) == result
+
+
+def test_sort_toml_when_version_order_sorts_sibling_tables() -> None:
+    source = "[item1]\nx = 1\n[item_a]\nx = 2\n[Item]\nx = 3\n"
+
+    result = sort_toml(source, OrderMode.VERSION)
+
+    assert result == "[Item]\nx = 3\n[item_a]\nx = 2\n[item1]\nx = 1\n"
+    assert sort_toml(result, OrderMode.VERSION) == result
+
+
+def test_sort_toml_when_version_order_sorts_dotted_keys_by_segment() -> None:
+    source = "a.v0 = 1\nB.x = 2\na.v00 = 3\n"
+
+    result = sort_toml(source, OrderMode.VERSION)
+
+    assert result == "B.x = 2\na.v00 = 3\na.v0 = 1\n"
+    assert sort_toml(result, OrderMode.VERSION) == result
 
 
 def test_sort_toml_when_source_ends_with_lone_carriage_return() -> None:

@@ -13,6 +13,7 @@ type SegmentKind = Literal["key", "table"]
 type SortKey = tuple[tuple[int, str | tuple[int, str]], ...]
 
 _NATURAL_PARTS = re.compile(r"(\d+)")
+_VERSION_CHUNKS = re.compile(r"[0-9]+|_| |[^0-9_ ]+")
 
 
 class OrderMode(StrEnum):
@@ -20,6 +21,7 @@ class OrderMode(StrEnum):
 
     NATURAL = "natural"
     ALPHA = "alpha"
+    VERSION = "version"
 
 
 class Scope(StrEnum):
@@ -766,6 +768,8 @@ def _sort_key(key: str, order: OrderMode) -> SortKey:
             return _natural_key(key)
         case OrderMode.ALPHA:
             return ((0, key.casefold()),)
+        case OrderMode.VERSION:
+            return _version_key(key)
 
 
 def _natural_key(key: str) -> SortKey:
@@ -782,3 +786,43 @@ def _natural_key(key: str) -> SortKey:
             parts.append((0, part.casefold()))
 
     return tuple(parts)
+
+
+def _version_key(key: str) -> SortKey:
+    """Return a key in the Rust style guide's version-sorting order.
+
+    Follows rustfmt's ``version_sort``: a key splits into ASCII digit runs,
+    single underscores, and runs of anything else, compared chunk by chunk
+    with case-sensitive code points. As the style guide states, an
+    underscore sorts immediately after a space and before every other
+    character, so a single space is also its own chunk, ranked just below
+    the underscore; rustfmt instead puts the underscore lowest, which only
+    matters for quoted keys. A text chunk never starts with a digit, so text
+    against a number is decided by the text's first character, which the
+    tags below encode. Numbers compare by value; when every chunk ties, the
+    first numeric chunk with more leading zeros sorts first. Those zero
+    counts trail the chunks under a tag below every chunk tag, so a key that
+    is a chunk prefix of another still sorts first.
+    """
+    parts: list[tuple[int, str | tuple[int, str]]] = []
+    zeros: list[tuple[int, str | tuple[int, str]]] = []
+
+    for chunk in cast("list[str]", _VERSION_CHUNKS.findall(key)):
+        if chunk == " ":
+            parts.append((1, ""))
+        elif chunk == "_":
+            parts.append((2, ""))
+        elif chunk[0] < " ":
+            parts.append((0, chunk))
+        elif chunk[0] < "0":
+            parts.append((3, chunk))
+        elif chunk[0] <= "9":
+            # (digit count, digits) compares numerically without materializing
+            # an int, which would raise past sys.get_int_max_str_digits().
+            digits = chunk.lstrip("0")
+            parts.append((4, (len(digits), digits)))
+            zeros.append((-1, (len(digits) - len(chunk), "")))
+        else:
+            parts.append((5, chunk))
+
+    return (*parts, *zeros)
