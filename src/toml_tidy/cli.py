@@ -275,13 +275,16 @@ def _render_diff(path: Path, before: str, after: str) -> bytes:
     the standard marker is added after it so the hunk stays well formed.
     A non-UTF-8 filename arrives surrogate-escaped, so ``surrogateescape``
     writes its original bytes into the headers instead of raising.
+    Each header name ends with a TAB, as GNU diff writes it: ``patch`` reads
+    the name up to that TAB, and without it stops at the first space.
+    ``difflib`` adds the TAB only before a file date, so it is appended here.
     """
     rendered: list[str] = []
     for line in difflib.unified_diff(
         _split_patch_lines(before),
         _split_patch_lines(after),
-        fromfile=str(path),
-        tofile=str(path),
+        fromfile=f"{path}\t",
+        tofile=f"{path}\t",
     ):
         rendered.append(line)
         if not line.endswith("\n"):

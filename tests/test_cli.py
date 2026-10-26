@@ -1160,7 +1160,7 @@ def test_diff_prints_unified_diff_without_writing(tmp_path: Path) -> None:
     assert (
         result.stdout_bytes
         == (
-            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n+a = 2\n b = 1\n-a = 2\n"
+            f"--- {path}\t\n+++ {path}\t\n@@ -1,2 +1,2 @@\n+a = 2\n b = 1\n-a = 2\n"
         ).encode()
     )
     assert path.read_bytes() == original
@@ -1177,7 +1177,8 @@ def test_diff_keeps_crlf_endings_on_content_lines(tmp_path: Path) -> None:
     assert (
         result.stdout_bytes
         == (
-            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n+a = 2\r\n b = 1\r\n-a = 2\r\n"
+            f"--- {path}\t\n+++ {path}\t\n@@ -1,2 +1,2 @@\n"
+            "+a = 2\r\n b = 1\r\n-a = 2\r\n"
         ).encode()
     )
     assert path.read_bytes() == original
@@ -1194,7 +1195,7 @@ def test_diff_marks_a_missing_final_newline(tmp_path: Path) -> None:
     assert (
         result.stdout_bytes
         == (
-            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n"
+            f"--- {path}\t\n+++ {path}\t\n@@ -1,2 +1,2 @@\n"
             "+a = 2\n b = 1\n-a = 2\n\\ No newline at end of file\n"
         ).encode()
     )
@@ -1212,7 +1213,7 @@ def test_diff_marks_a_missing_final_newline_on_a_crlf_file(tmp_path: Path) -> No
     assert (
         result.stdout_bytes
         == (
-            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n"
+            f"--- {path}\t\n+++ {path}\t\n@@ -1,2 +1,2 @@\n"
             "+a = 2\r\n b = 1\r\n-a = 2\n\\ No newline at end of file\n"
         ).encode()
     )
@@ -1226,9 +1227,22 @@ def test_diff_marks_an_unterminated_context_line() -> None:
     )
 
     assert rendered == (
-        b"--- config.toml\n+++ config.toml\n@@ -1,2 +1,2 @@\n"
+        b"--- config.toml\t\n+++ config.toml\t\n@@ -1,2 +1,2 @@\n"
         b"-b = 1\n+c = 3\n a = 2\n\\ No newline at end of file\n"
     )
+
+
+def test_diff_ends_each_header_name_with_a_tab(tmp_path: Path) -> None:
+    # patch reads a header name up to a TAB, or else only up to the first
+    # space, so a name with a space must be terminated for patch to find it.
+    path = tmp_path / "my dir" / "my config.toml"
+    path.parent.mkdir()
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert result.stdout.startswith(f"--- {path}\t\n+++ {path}\t\n@@ ")
 
 
 def test_diff_writes_an_undecodable_path_back_as_its_bytes() -> None:
@@ -1238,7 +1252,7 @@ def test_diff_writes_an_undecodable_path_back_as_its_bytes() -> None:
         Path("\udcff.toml"), "b = 1\na = 2\n", "a = 2\nb = 1\n"
     )
 
-    assert rendered.startswith(b"--- \xff.toml\n+++ \xff.toml\n")
+    assert rendered.startswith(b"--- \xff.toml\t\n+++ \xff.toml\t\n")
 
 
 def test_diff_reports_an_undecodable_path_end_to_end(tmp_path: Path) -> None:
@@ -1255,9 +1269,9 @@ def test_diff_reports_an_undecodable_path_end_to_end(tmp_path: Path) -> None:
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert result.exit_code == 1
     assert result.stdout_bytes.startswith(
-        b"--- " + os.fsencode(path) + b"\n+++ " + os.fsencode(path) + b"\n"
+        b"--- " + os.fsencode(path) + b"\t\n+++ " + os.fsencode(path) + b"\t\n"
     )
-    assert b"--- " + os.fsencode(later) + b"\n" in result.stdout_bytes
+    assert b"--- " + os.fsencode(later) + b"\t\n" in result.stdout_bytes
 
 
 def test_diff_splits_lines_only_at_line_feeds(tmp_path: Path) -> None:
@@ -1299,7 +1313,7 @@ def test_diff_multiple_paths_reports_errors_and_remaining_diffs(
     assert result.exit_code == 2
     assert result.stderr.startswith(f"{broken}: ")
     assert result.stdout == (
-        f"--- {unsorted_file}\n+++ {unsorted_file}\n"
+        f"--- {unsorted_file}\t\n+++ {unsorted_file}\t\n"
         "@@ -1,2 +1,2 @@\n+c = 2\n d = 1\n-c = 2\n"
     )
     assert unsorted_file.read_text(encoding="utf-8") == "d = 1\nc = 2\n"
@@ -1316,7 +1330,7 @@ def test_diff_multiple_paths_exits_one_when_any_file_would_change(
     result = CliRunner().invoke(app, [str(sorted_file), str(unsorted_file), "--diff"])
 
     assert result.exit_code == 1
-    assert result.stdout.startswith(f"--- {unsorted_file}\n")
+    assert result.stdout.startswith(f"--- {unsorted_file}\t\n")
 
 
 @pytest.mark.parametrize("other", ["--in-place", "--check"])
