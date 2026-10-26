@@ -180,14 +180,92 @@ def _find_user_config() -> Path | None:
     return None
 
 
-def _find_config(target: Path) -> tuple[Path, dict[str, object]] | None:
+type _Found = tuple[Path, dict[str, object]]
+
+
+def _reraise[T](outcome: T | OSError | _ConfigError) -> T:
+    """Return a memoized result, or raise the memoized error again."""
+    if isinstance(outcome, (OSError, _ConfigError)):
+        # Drop the previous raise's traceback so it does not grow per target.
+        raise outcome.with_traceback(None)
+    return outcome
+
+
+class _Discovery:
+    """Configuration discovery memoized for one CLI invocation.
+
+    ``sort_file`` creates one per call, so nothing outlives the process or
+    carries over between invocations. Within one, each directory is searched,
+    each configuration file read, and the user-level directory probed at
+    most once. A failure is memoized like a result and raised again for every
+    target that reaches it, so each of them reports it as it would uncached.
+    """
+
+    def __init__(self) -> None:
+        self._sections: dict[Path, dict[str, object] | _ConfigError | None] = {}
+        self._directories: dict[Path, _Found | OSError | _ConfigError | None] = {}
+        self._user_config: Path | None = None
+        self._user_config_looked_up: bool = False
+
+    def load_section(self, path: Path) -> dict[str, object] | None:
+        """Return :func:`_load_section` for ``path``, reading it only once."""
+        if path not in self._sections:
+            try:
+                self._sections[path] = _load_section(path)
+            except _ConfigError as error:
+                self._sections[path] = error
+        return _reraise(self._sections[path])
+
+    def search(self, directory: Path) -> _Found | None:
+        """Return the closest configuration at or above ``directory``.
+
+        The walk stops at the first directory already searched, and its
+        outcome is recorded for every directory passed on the way, since
+        none of those held a configuration of its own.
+        """
+        walked: list[Path] = []
+        outcome: _Found | OSError | _ConfigError | None = None
+        for candidate_dir in (directory, *directory.parents):
+            if candidate_dir in self._directories:
+                outcome = self._directories[candidate_dir]
+                break
+            walked.append(candidate_dir)
+            try:
+                outcome = self._probe(candidate_dir)
+            except (OSError, _ConfigError) as error:
+                outcome = error
+            if outcome is not None:
+                break
+        for walked_dir in walked:
+            self._directories[walked_dir] = outcome
+        return _reraise(outcome)
+
+    def _probe(self, directory: Path) -> _Found | None:
+        for name in _CONFIG_FILES:
+            candidate = directory / name
+            if candidate.is_file():
+                section = self.load_section(candidate)
+                if section is not None:
+                    return candidate, section
+        return None
+
+    def user_config(self) -> Path | None:
+        """Return :func:`_find_user_config`, looking only once."""
+        if not self._user_config_looked_up:
+            self._user_config = _find_user_config()
+            self._user_config_looked_up = True
+        return self._user_config
+
+
+def _find_config(target: Path, discovery: _Discovery) -> _Found | None:
     """Locate the configuration file that applies to ``target``.
 
     The closest directory holding a configuration file wins, and within one
     directory the first of :data:`_CONFIG_FILES` that applies; a
     ``pyproject.toml`` without ``[tool.toml-tidy]`` is skipped. Nothing is
     merged. When the hierarchy has none, the first existing file in the
-    user-level ``toml-tidy`` directory applies.
+    user-level ``toml-tidy`` directory applies. ``discovery`` memoizes every
+    step after resolving ``target`` itself.
     """
     try:
         # Python 3.12's Path.resolve() raises RuntimeError on cyclic
@@ -195,21 +273,16 @@ def _find_config(target: Path) -> tuple[Path, dict[str, object]] | None:
         # is_file() raises OSError for candidates it cannot stat, e.g. a
         # pyproject.toml symlinked into an unsearchable directory. Reading a
         # candidate raises _ConfigError instead, which passes through here.
-        directory = target.resolve().parent
-        for candidate_dir in (directory, *directory.parents):
-            for name in _CONFIG_FILES:
-                candidate = candidate_dir / name
-                if candidate.is_file():
-                    section = _load_section(candidate)
-                    if section is not None:
-                        return candidate, section
+        found = discovery.search(target.resolve().parent)
     except (OSError, RuntimeError) as error:
         message = f"{target}: {error}"
         raise _ConfigError(message) from None
-    user_config = _find_user_config()
+    if found is not None:
+        return found
+    user_config = discovery.user_config()
     if user_config is None:
         return None
-    return user_config, _load_section(user_config) or {}
+    return user_config, discovery.load_section(user_config) or {}
 
 
 def _resolve_settings(
@@ -543,6 +616,7 @@ def sort_file(
             typer.echo(str(error), err=True)
             raise typer.Exit(code=2) from None
 
+    discovery = _Discovery()
     exit_code = 0
     for path in paths:
         exit_code = max(
@@ -557,6 +631,7 @@ def sort_file(
                 blank_lines=blank_lines,
                 line_width=line_width,
                 fixed_settings=fixed_settings,
+                discovery=discovery,
             ),
         )
     if exit_code:
@@ -574,12 +649,13 @@ def _process_file(
     blank_lines: bool | None,
     line_width: int | None,
     fixed_settings: _Settings | None,
+    discovery: _Discovery,
 ) -> int:
     """Sort one file and return its exit code (0 ok, 1 would change, 2 error)."""
     settings = fixed_settings
     if settings is None:
         try:
-            found = _find_config(path)
+            found = _find_config(path, discovery)
             config, section = found if found is not None else (None, {})
             settings = _resolve_settings(
                 config, section, order, scope, blank_lines, line_width
