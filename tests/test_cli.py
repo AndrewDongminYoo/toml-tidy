@@ -1274,6 +1274,42 @@ def test_diff_reports_an_undecodable_path_end_to_end(tmp_path: Path) -> None:
     assert b"--- " + os.fsencode(later) + b"\t\n" in result.stdout_bytes
 
 
+@pytest.mark.parametrize("name", ["a\tb.toml", "a\nb.toml", "a\rb.toml", '"a.toml'])
+def test_diff_refuses_a_path_patch_cannot_read_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # patch reads a header name only up to a TAB or line break and reads a
+    # leading double quote as C quoting, so it would patch another file.
+    # Relative paths, because only a relative path can start with the quote.
+    monkeypatch.chdir(tmp_path)
+    path = Path(name)
+    original = b"b = 1\na = 2\n"
+    _ = path.write_bytes(original)
+    later = Path("later.toml")
+    _ = later.write_bytes(b"d = 1\nc = 2\n")
+
+    result = CliRunner().invoke(app, [str(path), str(later), "--diff"])
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        f"{path}: --diff cannot name this path in a patch header: "
+        "it contains a TAB, CR or LF, or starts with a double quote\n"
+    )
+    assert result.stdout.startswith(f"--- {later}\t\n")
+    assert str(path) not in result.stdout
+    assert path.read_bytes() == original
+
+
+def test_diff_keeps_an_inner_double_quote_in_the_header(tmp_path: Path) -> None:
+    path = tmp_path / 'a"b.toml'
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert result.stdout.startswith(f"--- {path}\t\n+++ {path}\t\n@@ ")
+
+
 def test_diff_splits_lines_only_at_line_feeds(tmp_path: Path) -> None:
     # str.splitlines would also break at U+2028 and U+0085, which a TOML
     # comment may hold, and the hunk counts would no longer match the file.

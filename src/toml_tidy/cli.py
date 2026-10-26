@@ -31,6 +31,14 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
     "multiple paths require --diff, --in-place or --check; stdout output takes one path"
 )
 _NO_NEWLINE_MARKER: Final = "\\ No newline at end of file\n"
+# patch ends a header name at a TAB or line break and reads a leading double
+# quote as a C-quoted name; no single quoting form works for both GNU and BSD
+# patch, so such a name is refused instead of printed into a misleading header.
+_AMBIGUOUS_HEADER_NAME: Final = re.compile(r'[\t\r\n]|\A"')
+_AMBIGUOUS_DIFF_PATH: Final = (
+    "--diff cannot name this path in a patch header: "
+    "it contains a TAB, CR or LF, or starts with a double quote"
+)
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset(
     {"order", "scope", "first", "blank-lines", "line-width"}
@@ -292,6 +300,18 @@ def _render_diff(path: Path, before: str, after: str) -> bytes:
     return "".join(rendered).encode("utf-8", "surrogateescape")
 
 
+def _print_diff(path: Path, before: str, after: str) -> int:
+    """Print the diff for ``path`` and return 1, or report it and return 2.
+
+    A path that ``patch`` would read back as another name gets no diff.
+    """
+    if _AMBIGUOUS_HEADER_NAME.search(str(path)):
+        typer.echo(f"{path}: {_AMBIGUOUS_DIFF_PATH}", err=True)
+        return 2
+    typer.echo(_render_diff(path, before, after), nl=False)
+    return 1
+
+
 def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> None:
     """Rewrite an existing inode when replacement cannot preserve security metadata.
 
@@ -495,11 +515,11 @@ def _process_file(
 
     if check or diff:
         changed = source != sorted_source
-        if diff and changed:
-            # Against the raw bytes and the restored output, never the
-            # LF-normalized forms, so a CRLF file's diff applies to that file.
-            typer.echo(_render_diff(path, raw_source, output), nl=False)
-        return 1 if changed else 0
+        # Against the raw bytes and the restored output, never the
+        # LF-normalized forms, so a CRLF file's diff applies to that file.
+        return (
+            _print_diff(path, raw_source, output) if diff and changed else int(changed)
+        )
 
     if in_place:
         if source != sorted_source:
