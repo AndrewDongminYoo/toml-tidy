@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `--config <path>` uses one configuration file for every target and skips discovery; a missing or invalid file exits `2` before any target is processed.
 - A user-level fallback in `$XDG_CONFIG_HOME/toml-tidy` (else `~/.config/toml-tidy`, also on macOS) or `%APPDATA%\toml-tidy` on Windows applies when no configuration is found above a target.
 - `--order version` (config: `order = "version"`) sorts keys with the Rust style guide's version sorting, the order used by Cargo manifests: case-sensitive, `_` right after a space, and equal numbers ordered by leading zeros.
-- `--diff` prints a unified diff for each file that would change, writes nothing, and exits `1` when any file would change; `--check` is unchanged. The diff keeps each file's line endings, so `patch` reproduces the `--in-place` result. A path that `patch` could not read back from the diff header (surrounding whitespace, a control character, or a leading double quote) is reported with exit `2` instead.
+- `--diff` prints a unified diff for each file that would change, writes nothing, and exits `1` when any file would change; `--check` is unchanged. The diff keeps each file's line endings and carries each path as given, so `patch -p0` run from the same directory reproduces the `--in-place` result for a relative path (GNU `patch` ignores absolute header paths as unsafe). A path that `patch` could not read back from the diff header (surrounding whitespace, a control character, or a leading double quote) is reported with exit `2` instead.
 
 ### Changed
 

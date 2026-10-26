@@ -51,6 +51,7 @@ Without `--in-place`, sorted TOML is written to standard output; this mode takes
 
 `--diff` also writes nothing: it prints a unified diff for each file that requires sorting, against exactly what `--in-place` would write, and exits with status `1` when any file requires sorting.
 The diff keeps each file's own line endings, so `patch` applies it to the file it came from.
+Each header carries the path as it was given on the command line, so pass relative paths and run `patch -p0` from the same directory: GNU `patch` ignores an absolute or `..` header path as unsafe.
 A file that requires sorting but whose path `patch` would not read back as exactly that name (leading or trailing whitespace, a control character such as a TAB or line break, or a leading double quote) gets an error with status `2` instead of a diff.
 `--diff` cannot be combined with `--in-place` or `--check`.
 
