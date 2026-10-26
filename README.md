@@ -101,7 +101,7 @@ Discovery follows [Ruff's rules](https://docs.astral.sh/ruff/configuration/#conf
 ```yaml
 repos:
   - repo: https://github.com/AndrewDongminYoo/toml-tidy
-    rev: v0.6.0 # pin the latest release; the hook ships from v0.2.0 onward
+    rev: v0.7.0 # pin the latest release; the hook ships from v0.2.0 onward
     hooks:
       - id: toml-tidy
 ```
@@ -114,7 +114,7 @@ hooks:
     args: [--blank-lines, --order, alpha]
 ```
 
-From the first release after v0.6.0, the hook only runs on files ending in `.toml` and on `Pipfile`, so generated lockfiles such as `uv.lock`, `poetry.lock` and `Cargo.lock` are left alone without an `exclude`.
+From v0.7.0, the hook only runs on files ending in `.toml` and on `Pipfile`, so generated lockfiles such as `uv.lock`, `poetry.lock` and `Cargo.lock` are left alone without an `exclude`.
 
 ## Trunk
 

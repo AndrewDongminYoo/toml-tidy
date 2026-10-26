@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.0] — 2026-10-27
+
+### Added
+
+- Standalone configuration files: `.toml-tidy.toml` and `toml-tidy.toml` hold the same keys as `[tool.toml-tidy]` at their top level, so a repository without a `pyproject.toml` can configure `toml-tidy`.
+- Discovery follows Ruff's rules: in each directory `.toml-tidy.toml` wins over `toml-tidy.toml`, which wins over a `pyproject.toml` with a `[tool.toml-tidy]` table, and the closest file found walking up from each target applies, with nothing merged.
+- `--config <path>` uses one configuration file for every target and skips discovery; a missing or invalid file exits `2` before any target is processed.
+- A user-level fallback in `$XDG_CONFIG_HOME/toml-tidy` (else `~/.config/toml-tidy`, also on macOS) or `%APPDATA%\toml-tidy` on Windows applies when no configuration is found above a target.
+- `--order version` (config: `order = "version"`) sorts keys with the Rust style guide's version sorting, the order used by Cargo manifests: case-sensitive, `_` right after a space, and equal numbers ordered by leading zeros.
+- `--diff` prints a unified diff for each file that would change, writes nothing, and exits `1` when any file would change; `--check` is unchanged. The diff keeps each file's line endings, so `patch` reproduces the `--in-place` result. A path that `patch` could not read back from the diff header (surrounding whitespace, a control character, or a leading double quote) is reported with exit `2` instead.
+
+### Changed
+
+- A `pyproject.toml` without a `[tool.toml-tidy]` table no longer stops the upward search for configuration; it is skipped, so a configuration further up the tree, or the user-level file, now applies below it.
+- Configuration discovery is cached for one invocation, so a run over many files reads each configuration file once.
+
+### Fixed
+
+- The pre-commit hook no longer rewrites `uv.lock`, `poetry.lock` or `Cargo.lock`: it now runs only on files ending in `.toml` (any case) and on `Pipfile`, so the README's `exclude: ^uv\.lock$` workaround is no longer needed.
+
 ## [v0.6.0] — 2026-08-31
 
 ### Added
@@ -87,6 +107,7 @@ Initial release.
 - Robust error contract: parse, encoding, filesystem, and recursion errors report `{path}: {message}` on stderr with exit code `2` and no traceback.
 - Python 3.12+ support, MIT license.
 
+[v0.7.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.6.0...v0.7.0
 [v0.6.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.5.0...v0.6.0
 [v0.5.0]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.4.1...v0.5.0
 [v0.4.1]: https://github.com/AndrewDongminYoo/toml-tidy/compare/v0.4.0...v0.4.1
