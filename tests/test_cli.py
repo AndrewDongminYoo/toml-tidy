@@ -5,9 +5,10 @@ import re
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TYPE_CHECKING, Self, TextIO, cast
+from typing import TYPE_CHECKING, NamedTuple, Self, TextIO, cast
 
 import pytest
 from typer.testing import CliRunner
@@ -78,6 +79,73 @@ def _read_acl(path: Path) -> str:
     # write updates — comparing it would fail whenever a run straddles a
     # displayed minute, with every ACL entry intact.
     return "".join(completed.stdout.splitlines(keepends=True)[1:])
+
+
+class _UserDirs(NamedTuple):
+    home: Path
+    config_home: Path
+
+
+def _config_above(directory: Path) -> Path | None:
+    """Return a toml-tidy configuration file in an ancestor of ``directory``."""
+    for ancestor in directory.parents:
+        for name in (".toml-tidy.toml", "toml-tidy.toml"):
+            if (ancestor / name).is_file():
+                return ancestor / name
+        pyproject = ancestor / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                with pyproject.open("rb") as handle:
+                    document: dict[str, object] = tomllib.load(handle)
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+                return pyproject  # discovery would stop here with an error
+            tool = document.get("tool")
+            if isinstance(tool, dict) and "toml-tidy" in tool:
+                return pyproject
+    return None
+
+
+@pytest.fixture(autouse=True)
+def user_dirs(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> _UserDirs:
+    """Keep the user-level configuration lookup away from the real one.
+
+    Both platform variables name one directory, so a test places a user file
+    the same way on every platform. ``HOME`` is replaced too, because each
+    lookup falls back to it.
+    """
+    # Discovery walks to the filesystem root, so a configuration file above
+    # tmp_path would silently apply to every test that expects defaults.
+    found = _config_above(tmp_path)
+    if found is not None:
+        pytest.fail(f"a toml-tidy configuration above tmp_path applies: {found}")
+    home = tmp_path_factory.mktemp("home")
+    config_home = tmp_path_factory.mktemp("config-home")
+    for variable in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(variable, str(home))
+    for variable in ("XDG_CONFIG_HOME", "APPDATA"):
+        monkeypatch.setenv(variable, str(config_home))
+    return _UserDirs(home, config_home)
+
+
+def _write(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _config_text(name: str, body: str) -> str:
+    """Render ``body`` as settings in the file called ``name``."""
+    return f"[tool.toml-tidy]\n{body}" if name == "pyproject.toml" else body
+
+
+_NATURAL = "item2 = 1\nitem10 = 2\n"  # the default order leaves it alone
+_ALPHA = "item10 = 2\nitem2 = 1\n"  # what `order = "alpha"` makes of it
+_ALPHA_CONFIG = 'order = "alpha"\n'
+_BROKEN_CONFIG = 'order = "bogus"\n'  # exits 2 if anything reads it
 
 
 def test_help_when_called_without_arguments() -> None:
@@ -988,6 +1056,327 @@ def test_rejects_unknown_config_key(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert result.stderr.startswith(f"{pyproject}: ")
     assert "unknown configuration key: 'blank_line'" in result.stderr
+
+
+def test_standalone_config_applies_without_any_pyproject(tmp_path: Path) -> None:
+    _ = _write(tmp_path / "repo" / "toml-tidy.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "repo" / "sub" / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == _ALPHA
+
+
+@pytest.mark.parametrize(
+    ("winner", "loser"),
+    [
+        (".toml-tidy.toml", "toml-tidy.toml"),
+        ("toml-tidy.toml", "pyproject.toml"),
+        (".toml-tidy.toml", "pyproject.toml"),
+    ],
+)
+def test_config_file_precedence_within_one_directory(
+    tmp_path: Path, winner: str, loser: str
+) -> None:
+    _ = _write(tmp_path / winner, _config_text(winner, _ALPHA_CONFIG))
+    _ = _write(tmp_path / loser, _config_text(loser, _BROKEN_CONFIG))
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_empty_dedicated_config_still_wins(tmp_path: Path) -> None:
+    _ = _write(tmp_path / "toml-tidy.toml", _ALPHA_CONFIG)
+    package = tmp_path / "package"
+    _ = _write(package / "toml-tidy.toml", "")
+    _ = _write(
+        package / "pyproject.toml", _config_text("pyproject.toml", _BROKEN_CONFIG)
+    )
+    path = _write(package / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _NATURAL
+
+
+def test_pyproject_without_the_table_does_not_shadow_the_root_config(
+    tmp_path: Path,
+) -> None:
+    # Behavior change: this pyproject.toml used to stop the walk, so the
+    # package fell back to defaults instead of the root configuration.
+    _ = _write(
+        tmp_path / "pyproject.toml", _config_text("pyproject.toml", _ALPHA_CONFIG)
+    )
+    package = tmp_path / "packages" / "lib"
+    _ = _write(package / "pyproject.toml", '[project]\nname = "lib"\n')
+    path = _write(package / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_closest_config_is_used_without_merging_its_parents(tmp_path: Path) -> None:
+    _ = _write(tmp_path / "toml-tidy.toml", _ALPHA_CONFIG)
+    _ = _write(tmp_path / "sub" / ".toml-tidy.toml", "blank-lines = true\n")
+    path = _write(tmp_path / "sub" / "config.toml", f"{_NATURAL}[t]\n")
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == f"{_NATURAL}\n[t]\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ("blank_line = true\n", "unknown configuration key: 'blank_line'"),
+        ("[tool.toml-tidy]\n", "unknown configuration key: 'tool'"),
+        (_BROKEN_CONFIG, "invalid order 'bogus'"),
+        ("line-width = 0\n", "line-width must be a positive integer"),
+        ("order =\n", "Invalid value"),
+    ],
+)
+def test_dedicated_config_is_validated_like_the_pyproject_table(
+    tmp_path: Path, body: str, detail: str
+) -> None:
+    config = _write(tmp_path / "bad" / "toml-tidy.toml", body)
+    broken = _write(tmp_path / "bad" / "config.toml", "a = 1\n")
+    fixable = _write(tmp_path / "good" / "config.toml", "b = 1\na = 2\n")
+
+    result = CliRunner().invoke(app, [str(broken), str(fixable), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{config}: ")
+    assert detail in result.stderr
+    assert "Traceback" not in result.output
+    assert fixable.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+
+
+def test_config_option_skips_discovery_for_every_target(tmp_path: Path) -> None:
+    config = _write(tmp_path / "shared.toml", _ALPHA_CONFIG)
+    targets = [
+        _write(tmp_path / directory / "config.toml", _NATURAL) for directory in "ab"
+    ]
+    for target in targets:
+        _ = _write(target.parent / "toml-tidy.toml", _BROKEN_CONFIG)
+
+    result = CliRunner().invoke(
+        app, [*map(str, targets), "--in-place", "--config", str(config)]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert [target.read_text(encoding="utf-8") for target in targets] == [_ALPHA] * 2
+
+
+def test_config_option_reads_the_table_of_a_pyproject(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "settings" / "pyproject.toml",
+        _config_text("pyproject.toml", _ALPHA_CONFIG),
+    )
+    _ = _write(tmp_path / "project" / "toml-tidy.toml", _BROKEN_CONFIG)
+    path = _write(tmp_path / "project" / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path), "--config", str(config)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_config_option_pyproject_without_the_table_means_defaults(
+    tmp_path: Path,
+) -> None:
+    config = _write(tmp_path / "settings" / "pyproject.toml", '[project]\nname = "x"\n')
+    _ = _write(tmp_path / "project" / "toml-tidy.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "project" / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path), "--config", str(config)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _NATURAL
+
+
+def test_cli_flags_override_the_config_option(tmp_path: Path) -> None:
+    config = _write(tmp_path / "shared.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(
+        app, [str(path), "--config", str(config), "--order", "natural"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _NATURAL
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("missing.toml", None),
+        ("unknown.toml", "blank_line = true\n"),
+        ("invalid-value.toml", _BROKEN_CONFIG),
+        ("invalid-toml.toml", "order =\n"),
+        ("pyproject.toml", '[tool]\ntoml-tidy = "alpha"\n'),
+    ],
+)
+def test_bad_config_option_exits_once_before_any_target(
+    tmp_path: Path, name: str, content: str | None
+) -> None:
+    config = tmp_path / "settings" / name
+    if content is not None:
+        _ = _write(config, content)
+    fixable = _write(tmp_path / "fixable.toml", "b = 1\na = 2\n")
+    missing = tmp_path / "missing-target.toml"
+
+    result = CliRunner().invoke(
+        app, [str(fixable), str(missing), "--in-place", "--config", str(config)]
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{config}: ")
+    assert result.stderr.count("\n") == 1
+    assert "missing-target" not in result.stderr
+    assert "Traceback" not in result.output
+    assert fixable.read_text(encoding="utf-8") == "b = 1\na = 2\n"
+
+
+def test_user_config_applies_when_the_hierarchy_has_none(
+    tmp_path: Path, user_dirs: _UserDirs
+) -> None:
+    user_dir = user_dirs.config_home / "toml-tidy"
+    _ = _write(user_dir / ".toml-tidy.toml", _ALPHA_CONFIG)
+    _ = _write(user_dir / "toml-tidy.toml", _BROKEN_CONFIG)
+    _ = _write(
+        user_dir / "pyproject.toml", _config_text("pyproject.toml", _BROKEN_CONFIG)
+    )
+    # A pyproject.toml without the table is not a configuration file.
+    _ = _write(tmp_path / "pyproject.toml", '[project]\nname = "x"\n')
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_user_config_is_ignored_when_the_hierarchy_has_one(
+    tmp_path: Path, user_dirs: _UserDirs
+) -> None:
+    _ = _write(user_dirs.config_home / "toml-tidy" / "toml-tidy.toml", _BROKEN_CONFIG)
+    _ = _write(tmp_path / "toml-tidy.toml", "")
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _NATURAL
+
+
+def test_relative_xdg_config_home_is_ignored(  # trufflehog:ignore
+    tmp_path: Path, user_dirs: _UserDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", False)
+    working_dir = tmp_path / "cwd"
+    _ = _write(
+        working_dir / "relative" / "toml-tidy" / "toml-tidy.toml", _BROKEN_CONFIG
+    )
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative")
+    _ = _write(
+        user_dirs.home / ".config" / "toml-tidy" / "toml-tidy.toml", _ALPHA_CONFIG
+    )
+    path = _write(tmp_path / "project" / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_windows_user_config_falls_back_to_the_roaming_directory(
+    tmp_path: Path, user_dirs: _UserDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Stdout mode only: the flag also selects the Windows write path.
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", True)
+    monkeypatch.delenv("APPDATA")
+    # XDG_CONFIG_HOME still names this directory, and Windows ignores it.
+    _ = _write(user_dirs.config_home / "toml-tidy" / "toml-tidy.toml", _BROKEN_CONFIG)
+    roaming = user_dirs.home / "AppData" / "Roaming"
+    _ = _write(roaming / "toml-tidy" / "toml-tidy.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+def test_windows_user_config_reads_appdata(
+    tmp_path: Path, user_dirs: _UserDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", True)
+    appdata = tmp_path / "appdata"
+    monkeypatch.setenv("APPDATA", str(appdata))
+    _ = _write(user_dirs.config_home / "toml-tidy" / "toml-tidy.toml", _BROKEN_CONFIG)
+    _ = _write(appdata / "toml-tidy" / "toml-tidy.toml", _ALPHA_CONFIG)
+    path = _write(tmp_path / "project" / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _ALPHA
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_undeterminable_home_falls_back_to_the_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, windows: bool
+) -> None:
+    # A container run under a UID with no passwd entry and no HOME makes
+    # Path.home() raise; Ruff then finds no user file and uses the defaults.
+    monkeypatch.setattr(toml_tidy.cli, "_IS_WINDOWS", windows)
+    for variable in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA"):
+        monkeypatch.delenv(variable)
+
+    def no_home() -> Path:
+        message = "Could not determine home directory."
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(Path, "home", no_home)
+    path = _write(tmp_path / "config.toml", "b = 1\na = 2\n")
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == "a = 2\nb = 1\n"
+
+
+def test_unsearchable_user_config_dir_falls_back_to_the_defaults(
+    tmp_path: Path, user_dirs: _UserDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_dir = user_dirs.config_home / "toml-tidy"
+    _ = _write(user_dir / "toml-tidy.toml", _ALPHA_CONFIG)
+    original_is_file = Path.is_file
+
+    def deny_probe(self: Path) -> bool:
+        # A config directory the user cannot search (HOME=/root for a
+        # non-root job) makes is_file() raise; chmod is bypassed by root in
+        # CI, so simulate it.
+        if self.parent == user_dir:
+            raise PermissionError(13, "Permission denied", str(self))
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", deny_probe)
+    path = _write(tmp_path / "config.toml", _NATURAL)
+
+    result = CliRunner().invoke(app, [str(path)])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.output == _NATURAL
 
 
 def test_stdout_preserves_crlf_line_endings(tmp_path: Path) -> None:

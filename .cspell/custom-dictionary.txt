@@ -1,8 +1,10 @@
 # Custom Dictionary Words
 addopts
 aots
+autouse
 basedpyright
 DACL
+delenv
 docstrings
 Dongmin
 ERRNOS

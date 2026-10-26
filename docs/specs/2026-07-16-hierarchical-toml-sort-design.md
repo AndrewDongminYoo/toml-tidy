@@ -60,17 +60,22 @@ The CLI continues to validate its own flags and configuration; this library cont
 
 ## Configuration
 
-Per-file defaults come from the `[tool.toml-tidy]` table of the nearest `pyproject.toml` found walking up from each target file; the first `pyproject.toml` found wins whether or not it contains the table.
+Per-file defaults come from the closest configuration file found walking up from each target file's directory to the filesystem root, following Ruff's discovery rules.
+In each directory `.toml-tidy.toml` wins over `toml-tidy.toml`, which wins over the `[tool.toml-tidy]` table of `pyproject.toml`; a dedicated file applies even when empty, and a `pyproject.toml` without the table is skipped.
+The closest file is used alone, with no merging across files.
+`--config <path>` replaces discovery for every target, and is validated once before any target is processed.
+When the hierarchy holds no configuration file, the first existing file in the user-level `toml-tidy` directory applies (`$XDG_CONFIG_HOME` when absolute, else `~/.config`; on Windows `%APPDATA%`, else `~\AppData\Roaming`).
+A user-level directory that cannot be located or searched counts as holding no file, so the defaults apply.
 
-Supported keys are `order`, `scope`, `first`, and `blank-lines`; CLI flags override `order`, `scope`, and `blank-lines`, while `first` is configuration-only.
+Supported keys are `order`, `scope`, `first`, `blank-lines`, and `line-width`; CLI flags override `order`, `scope`, `blank-lines`, and `line-width`, while `first` is configuration-only.
 
 `first` lists top-level entry names that are pinned ahead of their sorted siblings in the listed order, matched against the leading segment of the parsed key path, and never applies inside nested tables.
 
 When a segment kind is excluded by `scope`, `first` cannot move entries of that kind because the segment is not reordered at all.
 
-An unreadable configuration file or an invalid configuration value reports `{pyproject path}: {message}` on stderr and exits with code two.
+An unreadable configuration file or an invalid configuration value reports `{config path}: {message}` on stderr and exits with code two.
 
-Unknown keys in `[tool.toml-tidy]` are invalid and report the same configuration error rather than being silently ignored.
+Unknown keys in a configuration file are invalid and report the same configuration error rather than being silently ignored.
 
 ## Representation Strategy
 
@@ -127,7 +132,7 @@ A missing or unreadable path (including a directory) reports `{path}: {message}`
 
 Unit tests cover alpha, natural, and version ordering (including the Rust style guide's example list), case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, arrays of tables, scope-limited sorting, and `first` pinning.
 
-CLI tests cover standard output, check-mode exit codes, in-place rewriting, invalid TOML without mutation, multi-path aggregation, and `[tool.toml-tidy]` configuration resolution including CLI override and invalid values.
+CLI tests cover standard output, check-mode exit codes, in-place rewriting, invalid TOML without mutation, multi-path aggregation, and configuration file discovery and resolution including precedence, `--config`, the user-level fallback, CLI override, and invalid values.
 
 Array spacing and `line-width` expansion are additionally checked by a permutation sweep over block shapes, option combinations, and line endings, asserting idempotence, unchanged parsed data, and the spacing and width properties against the dumped text rather than the measuring code.
 The sweep derives widths from each fixture's own rendered line lengths so every array line becomes a boundary case; fixed widths alone left an off-by-one in the measurement undetected.

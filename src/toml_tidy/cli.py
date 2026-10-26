@@ -41,6 +41,9 @@ _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset(
     {"order", "scope", "first", "blank-lines", "line-width"}
 )
+_PYPROJECT: Final = "pyproject.toml"
+# Per directory, the first of these that applies wins (Ruff's order).
+_CONFIG_FILES: Final = (".toml-tidy.toml", "toml-tidy.toml", _PYPROJECT)
 _IS_WINDOWS: Final = os.name == "nt"
 _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
 # A NULL acl_get_file is both "this file carries none" and "I could not look".
@@ -96,7 +99,7 @@ _HAS_ACL: Final = _load_acl_probe()
 
 
 class _ConfigError(Exception):
-    """Invalid or unreadable ``[tool.toml-tidy]`` configuration."""
+    """Invalid or unreadable toml-tidy configuration file."""
 
 
 class _Settings(NamedTuple):
@@ -112,86 +115,139 @@ def _as_table(value: object) -> dict[str, object]:
     return cast("dict[str, object]", value) if isinstance(value, dict) else {}
 
 
-def _find_pyproject(target: Path) -> Path | None:
+def _load_section(path: Path) -> dict[str, object] | None:
+    """Read the settings that a configuration file holds.
+
+    A dedicated file holds them at its top level, so it always applies, even
+    when empty. A ``pyproject.toml`` holds them in ``[tool.toml-tidy]`` and
+    returns ``None`` when that table is absent.
+    """
+    try:
+        with path.open("rb") as handle:
+            document: dict[str, object] = tomllib.load(handle)
+    except (
+        tomllib.TOMLDecodeError,
+        UnicodeDecodeError,
+        OSError,
+        RecursionError,
+    ) as error:
+        message = f"{path}: {error}"
+        raise _ConfigError(message) from None
+    if path.name != _PYPROJECT:
+        return document
+    raw_section = _as_table(document.get("tool")).get("toml-tidy")
+    if raw_section is None:
+        return None
+    # A present but non-table value is a config mistake, not an absent
+    # config — silently falling back to defaults would hide it.
+    if not isinstance(raw_section, dict):
+        message = f"{path}: [tool.toml-tidy] must be a table, got {raw_section!r}"
+        raise _ConfigError(message)
+    return cast("dict[str, object]", raw_section)
+
+
+def _user_config_dir() -> Path:
+    """Return the per-user configuration directory, as Ruff locates it.
+
+    This mirrors etcetera's ``choose_base_strategy().config_dir()``:
+    ``%APPDATA%`` on Windows, else ``$XDG_CONFIG_HOME`` when it is an
+    absolute path, else ``~/.config`` — on macOS too.
+    """
+    if _IS_WINDOWS:
+        appdata = os.environ.get("APPDATA")
+        return Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    xdg_config_home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
+    if xdg_config_home.is_absolute():
+        return xdg_config_home
+    return Path.home() / ".config"
+
+
+def _find_user_config() -> Path | None:
+    """Return the first existing file in the user-level ``toml-tidy`` directory.
+
+    The lookup is an optional fallback, so a home directory that cannot be
+    determined or a probe that cannot stat its candidate means no user file,
+    as in Ruff, whose ``find_user_settings_toml`` gives up on both.
+    """
+    try:
+        user_dir = _user_config_dir() / "toml-tidy"
+        for name in _CONFIG_FILES:
+            candidate = user_dir / name
+            if candidate.is_file():
+                return candidate
+    except (OSError, RuntimeError):
+        return None
+    return None
+
+
+def _find_config(target: Path) -> tuple[Path, dict[str, object]] | None:
+    """Locate the configuration file that applies to ``target``.
+
+    The closest directory holding a configuration file wins, and within one
+    directory the first of :data:`_CONFIG_FILES` that applies; a
+    ``pyproject.toml`` without ``[tool.toml-tidy]`` is skipped. Nothing is
+    merged. When the hierarchy has none, the first existing file in the
+    user-level ``toml-tidy`` directory applies.
+    """
     try:
         # Python 3.12's Path.resolve() raises RuntimeError on cyclic
         # symlinks (3.13+ resolves as far as possible instead), and
         # is_file() raises OSError for candidates it cannot stat, e.g. a
-        # pyproject.toml symlinked into an unsearchable directory.
+        # pyproject.toml symlinked into an unsearchable directory. Reading a
+        # candidate raises _ConfigError instead, which passes through here.
         directory = target.resolve().parent
         for candidate_dir in (directory, *directory.parents):
-            candidate = candidate_dir / "pyproject.toml"
-            if candidate.is_file():
-                return candidate
+            for name in _CONFIG_FILES:
+                candidate = candidate_dir / name
+                if candidate.is_file():
+                    section = _load_section(candidate)
+                    if section is not None:
+                        return candidate, section
     except (OSError, RuntimeError) as error:
         message = f"{target}: {error}"
         raise _ConfigError(message) from None
-    return None
+    user_config = _find_user_config()
+    if user_config is None:
+        return None
+    return user_config, _load_section(user_config) or {}
 
 
 def _resolve_settings(
-    target: Path,
+    config: Path | None,
+    section: dict[str, object],
     order: OrderMode | None,
     scope: Scope | None,
     blank_lines: bool | None,
     line_width: int | None,
 ) -> _Settings:
-    """Merge CLI flags over the nearest pyproject's ``[tool.toml-tidy]`` table.
+    """Merge CLI flags over the settings ``section`` read from ``config``.
 
-    The first ``pyproject.toml`` found walking up from the target file wins,
-    whether or not it contains a ``[tool.toml-tidy]`` table.
+    Only a key whose flag is absent is validated, since a flag replaces it.
     """
-    pyproject = _find_pyproject(target)
-    section: dict[str, object] = {}
-    if pyproject is not None:
-        try:
-            with pyproject.open("rb") as handle:
-                raw_section = _as_table(tomllib.load(handle).get("tool")).get(
-                    "toml-tidy"
-                )
-        except (
-            tomllib.TOMLDecodeError,
-            UnicodeDecodeError,
-            OSError,
-            RecursionError,
-        ) as error:
-            message = f"{pyproject}: {error}"
-            raise _ConfigError(message) from None
-        # A present but non-table value is a config mistake, not an absent
-        # config — silently falling back to defaults would hide it.
-        if raw_section is not None:
-            if not isinstance(raw_section, dict):
-                message = (
-                    f"{pyproject}: [tool.toml-tidy] must be a table,"
-                    f" got {raw_section!r}"
-                )
-                raise _ConfigError(message)
-            section = cast("dict[str, object]", raw_section)
-
     unknown_keys = sorted(section.keys() - _CONFIG_KEYS)
     if unknown_keys:
         noun = "key" if len(unknown_keys) == 1 else "keys"
         rendered = ", ".join(repr(key) for key in unknown_keys)
-        message = f"{pyproject}: unknown configuration {noun}: {rendered}"
+        message = f"{config}: unknown configuration {noun}: {rendered}"
         raise _ConfigError(message)
 
     if order is None:
         order_raw = section.get("order", OrderMode.NATURAL.value)
-        order = _parse_enum(order_raw, OrderMode, "order", pyproject)
+        order = _parse_enum(order_raw, OrderMode, "order", config)
     if scope is None:
         scope_raw = section.get("scope", Scope.ALL.value)
-        scope = _parse_enum(scope_raw, Scope, "scope", pyproject)
+        scope = _parse_enum(scope_raw, Scope, "scope", config)
     if blank_lines is None:
-        blank_lines = _parse_bool(section.get("blank-lines", False), pyproject)
+        blank_lines = _parse_bool(section.get("blank-lines", False), config)
     if line_width is None:
-        line_width = _parse_line_width(section.get("line-width"), pyproject)
-    first = _parse_first(section.get("first", []), pyproject)
+        line_width = _parse_line_width(section.get("line-width"), config)
+    first = _parse_first(section.get("first", []), config)
 
     return _Settings(order, scope, first, blank_lines, line_width)
 
 
 def _parse_enum[E: StrEnum](
-    value: object, enum_type: type[E], key: str, pyproject: Path | None
+    value: object, enum_type: type[E], key: str, config: Path | None
 ) -> E:
     if isinstance(value, str):
         try:
@@ -201,34 +257,34 @@ def _parse_enum[E: StrEnum](
             detail = f"invalid {key} {value!r} (expected one of: {allowed})"
     else:
         detail = f"{key} must be a string, got {value!r}"
-    message = f"{pyproject}: {detail}"
+    message = f"{config}: {detail}"
     raise _ConfigError(message)
 
 
-def _parse_bool(value: object, pyproject: Path | None) -> bool:
+def _parse_bool(value: object, config: Path | None) -> bool:
     if isinstance(value, bool):
         return value
-    message = f"{pyproject}: blank-lines must be a boolean, got {value!r}"
+    message = f"{config}: blank-lines must be a boolean, got {value!r}"
     raise _ConfigError(message)
 
 
-def _parse_line_width(value: object, pyproject: Path | None) -> int | None:
+def _parse_line_width(value: object, config: Path | None) -> int | None:
     if value is None:
         return None
     # bool is an int subclass, so `line-width = true` would otherwise pass.
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
-    message = f"{pyproject}: line-width must be a positive integer, got {value!r}"
+    message = f"{config}: line-width must be a positive integer, got {value!r}"
     raise _ConfigError(message)
 
 
-def _parse_first(value: object, pyproject: Path | None) -> tuple[str, ...]:
+def _parse_first(value: object, config: Path | None) -> tuple[str, ...]:
     if isinstance(value, list):
         items = cast("list[object]", value)
         first = tuple(item for item in items if isinstance(item, str))
         if len(first) == len(items):
             return first
-    message = f"{pyproject}: first must be a list of strings, got {value!r}"
+    message = f"{config}: first must be a list of strings, got {value!r}"
     raise _ConfigError(message)
 
 
@@ -460,6 +516,9 @@ def sort_file(
         bool | None, typer.Option("--blank-lines/--no-blank-lines")
     ] = None,
     line_width: Annotated[int | None, typer.Option("--line-width", min=1)] = None,
+    # No exists=True: a bad --config reports "{path}: {message}" like any
+    # other configuration file, not as a Click usage error.
+    config: Annotated[Path | None, typer.Option("--config")] = None,
 ) -> None:
     """Sort TOML keys while preserving table hierarchy."""
     if in_place and check:
@@ -470,6 +529,19 @@ def sort_file(
     # would silently merge them into one invalid TOML file.
     if len(paths) > 1 and not (in_place or check or diff):
         raise typer.BadParameter(_MULTIPLE_PATHS_NEED_MODE)
+
+    # --config skips discovery, so its settings are resolved and validated
+    # once, before any target is touched.
+    fixed_settings: _Settings | None = None
+    if config is not None:
+        try:
+            section = _load_section(config) or {}
+            fixed_settings = _resolve_settings(
+                config, section, order, scope, blank_lines, line_width
+            )
+        except _ConfigError as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(code=2) from None
 
     exit_code = 0
     for path in paths:
@@ -484,6 +556,7 @@ def sort_file(
                 scope=scope,
                 blank_lines=blank_lines,
                 line_width=line_width,
+                fixed_settings=fixed_settings,
             ),
         )
     if exit_code:
@@ -500,13 +573,20 @@ def _process_file(
     scope: Scope | None,
     blank_lines: bool | None,
     line_width: int | None,
+    fixed_settings: _Settings | None,
 ) -> int:
     """Sort one file and return its exit code (0 ok, 1 would change, 2 error)."""
-    try:
-        settings = _resolve_settings(path, order, scope, blank_lines, line_width)
-    except _ConfigError as error:
-        typer.echo(str(error), err=True)
-        return 2
+    settings = fixed_settings
+    if settings is None:
+        try:
+            found = _find_config(path)
+            config, section = found if found is not None else (None, {})
+            settings = _resolve_settings(
+                config, section, order, scope, blank_lines, line_width
+            )
+        except _ConfigError as error:
+            typer.echo(str(error), err=True)
+            return 2
 
     try:
         with path.open(encoding="utf-8", newline="") as handle:
