@@ -1274,13 +1274,43 @@ def test_diff_reports_an_undecodable_path_end_to_end(tmp_path: Path) -> None:
     assert b"--- " + os.fsencode(later) + b"\t\n" in result.stdout_bytes
 
 
-@pytest.mark.parametrize("name", ["a\tb.toml", "a\nb.toml", "a\rb.toml", '"a.toml'])
+def test_diff_names_an_undecodable_path_through_the_header_guard(
+    capsysbinary: pytest.CaptureFixture[bytes],
+) -> None:
+    # A surrogate-escaped byte is written back as its own byte, so the guard
+    # must let it through. This
+    # runs where the filesystem refuses non-UTF-8 names and the end-to-end
+    # test above skips.
+    status = toml_tidy.cli._print_diff(  # pyright: ignore[reportPrivateUsage]
+        Path("\udcff.toml"), "b = 1\na = 2\n", "a = 2\nb = 1\n"
+    )
+
+    assert status == 1
+    assert capsysbinary.readouterr().out.startswith(b"--- \xff.toml\t\n")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a\tb.toml",
+        "a\nb.toml",
+        "a\rb.toml",
+        '"a.toml',
+        "config.toml ",
+        " config.toml",
+        "a\x0bb.toml",
+        "config.toml\u2028",
+        "config.toml\xa0",
+    ],
+)
 def test_diff_refuses_a_path_patch_cannot_read_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    # patch reads a header name only up to a TAB or line break and reads a
-    # leading double quote as C quoting, so it would patch another file.
-    # Relative paths, because only a relative path can start with the quote.
+    # A header name must come back from patch as exactly that name. patch
+    # strips surrounding whitespace, ends a name at a TAB or line break, and
+    # reads a leading double quote as C quoting, so it would patch another
+    # file. Relative paths, because only a relative path can start with the
+    # quote or a space.
     monkeypatch.chdir(tmp_path)
     path = Path(name)
     original = b"b = 1\na = 2\n"
@@ -1292,8 +1322,9 @@ def test_diff_refuses_a_path_patch_cannot_read_back(
 
     assert result.exit_code == 2
     assert result.stderr == (
-        f"{path}: --diff cannot name this path in a patch header: "
-        "it contains a TAB, CR or LF, or starts with a double quote\n"
+        f"{path}: --diff cannot name this path in a patch header: patch would "
+        "not read it back as exactly this name (leading or trailing whitespace, "
+        "a control character, or a leading double quote)\n"
     )
     assert result.stdout.startswith(f"--- {later}\t\n")
     assert str(path) not in result.stdout
@@ -1302,6 +1333,21 @@ def test_diff_refuses_a_path_patch_cannot_read_back(
 
 def test_diff_keeps_an_inner_double_quote_in_the_header(tmp_path: Path) -> None:
     path = tmp_path / 'a"b.toml'
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert result.stdout.startswith(f"--- {path}\t\n+++ {path}\t\n@@ ")
+
+
+@pytest.mark.parametrize("name", ["a\xa0b.toml", "a\u2028b.toml", "a\u200db.toml"])
+def test_diff_keeps_an_inner_non_ascii_space_or_format_character(
+    tmp_path: Path, name: str
+) -> None:
+    # Only surrounding whitespace and control characters change what patch
+    # reads; inside the name these are ordinary bytes.
+    path = tmp_path / name
     _ = path.write_bytes(b"b = 1\na = 2\n")
 
     result = CliRunner().invoke(app, [str(path), "--diff"])

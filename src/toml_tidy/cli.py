@@ -10,6 +10,7 @@ import shutil
 import stat
 import sys
 import tomllib
+import unicodedata
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
@@ -31,13 +32,10 @@ _MULTIPLE_PATHS_NEED_MODE: Final = (
     "multiple paths require --diff, --in-place or --check; stdout output takes one path"
 )
 _NO_NEWLINE_MARKER: Final = "\\ No newline at end of file\n"
-# patch ends a header name at a TAB or line break and reads a leading double
-# quote as a C-quoted name; no single quoting form works for both GNU and BSD
-# patch, so such a name is refused instead of printed into a misleading header.
-_AMBIGUOUS_HEADER_NAME: Final = re.compile(r'[\t\r\n]|\A"')
 _AMBIGUOUS_DIFF_PATH: Final = (
-    "--diff cannot name this path in a patch header: "
-    "it contains a TAB, CR or LF, or starts with a double quote"
+    "--diff cannot name this path in a patch header: patch would not read it "
+    "back as exactly this name (leading or trailing whitespace, a control "
+    "character, or a leading double quote)"
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset(
@@ -300,12 +298,31 @@ def _render_diff(path: Path, before: str, after: str) -> bytes:
     return "".join(rendered).encode("utf-8", "surrogateescape")
 
 
+def _patch_reads_back(name: str) -> bool:
+    """Return whether ``patch`` reads ``name`` back from a header unchanged.
+
+    The invariant is that a header name must come back from ``patch`` as
+    exactly that name. ``patch`` strips whitespace around a name, ends it at a
+    TAB or line break, and reads a leading double quote as C quoting; no single
+    quoting form works for both GNU and BSD ``patch``. So a name passes only
+    when it has no surrounding whitespace, no leading double quote, and no
+    control character. Other characters, including a non-ASCII space inside
+    the name or a surrogate-escaped non-UTF-8 byte, are written as their own
+    bytes and read back unchanged.
+    """
+    return (
+        name == name.strip()
+        and not name.startswith('"')
+        and not any(unicodedata.category(char) == "Cc" for char in name)
+    )
+
+
 def _print_diff(path: Path, before: str, after: str) -> int:
     """Print the diff for ``path`` and return 1, or report it and return 2.
 
     A path that ``patch`` would read back as another name gets no diff.
     """
-    if _AMBIGUOUS_HEADER_NAME.search(str(path)):
+    if not _patch_reads_back(str(path)):
         typer.echo(f"{path}: {_AMBIGUOUS_DIFF_PATH}", err=True)
         return 2
     typer.echo(_render_diff(path, before, after), nl=False)
