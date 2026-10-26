@@ -812,8 +812,6 @@ def _version_key(key: str) -> SortKey:
             parts.append((1, ""))
         elif chunk == "_":
             parts.append((2, ""))
-        elif chunk[0] < " ":
-            parts.append((0, chunk))
         elif chunk[0] < "0":
             parts.append((3, chunk))
         elif chunk[0] <= "9":

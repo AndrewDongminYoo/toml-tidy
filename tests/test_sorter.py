@@ -566,7 +566,10 @@ def test_version_order_matches_rustfmt_vectors(expected: list[str]) -> None:
         # (which never sees a space in an identifier) puts "_" first.
         [" a", "_a"],
         ["a b", "a_b"],
-        ["\x01", " ", "_", "!", "1", "a"],
+        # A control character is "any other character", so it follows "_".
+        [" ", "_", "\x01", "!", "1", "a"],
+        [" a", "_a", "\ta"],
+        ["a b", "a_b", "a\tb"],
     ],
 )
 def test_version_order_sorts_underscore_right_after_space(
