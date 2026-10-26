@@ -38,6 +38,7 @@ For development from a local checkout, use `uv tool install .`.
 ```bash
 toml-tidy pyproject.toml
 toml-tidy pyproject.toml --check
+toml-tidy pyproject.toml --diff
 toml-tidy pyproject.toml --in-place --order natural
 toml-tidy config/*.toml --in-place --scope tables
 ```
@@ -48,9 +49,13 @@ Without `--in-place`, sorted TOML is written to standard output; this mode takes
 
 `--check` writes nothing and exits with status `1` when any file requires sorting.
 
+`--diff` also writes nothing: it prints a unified diff for each file that requires sorting, against exactly what `--in-place` would write, and exits with status `1` when any file requires sorting.
+The diff keeps each file's own line endings, so `patch` applies it to the file it came from.
+`--diff` cannot be combined with `--in-place` or `--check`.
+
 `--in-place` rewrites each file only when sorting changes it.
 
-With multiple paths the worst exit code wins: `2` for any error, else `1` for any check difference, else `0`; an error in one file does not stop the remaining files.
+With multiple paths the worst exit code wins: `2` for any error, else `1` for any `--check` or `--diff` difference, else `0`; an error in one file does not stop the remaining files.
 
 `--scope` limits what gets sorted: `all` (default) sorts everything, `tables` sorts only sibling table declarations, and `keys` sorts only direct key-value entries.
 

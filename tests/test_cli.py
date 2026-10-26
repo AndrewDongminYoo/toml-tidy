@@ -1147,3 +1147,200 @@ def test_line_width_normalizes_separators_before_measuring(tmp_path: Path) -> No
 
     assert result.exit_code == 0
     assert result.stdout.startswith("value = [\n")
+
+
+def test_diff_prints_unified_diff_without_writing(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = b"b = 1\na = 2\n"
+    _ = path.write_bytes(original)
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert (
+        result.stdout_bytes
+        == (
+            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n+a = 2\n b = 1\n-a = 2\n"
+        ).encode()
+    )
+    assert path.read_bytes() == original
+
+
+def test_diff_keeps_crlf_endings_on_content_lines(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = b"b = 1\r\na = 2\r\n"
+    _ = path.write_bytes(original)
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert (
+        result.stdout_bytes
+        == (
+            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n+a = 2\r\n b = 1\r\n-a = 2\r\n"
+        ).encode()
+    )
+    assert path.read_bytes() == original
+
+
+def test_diff_marks_a_missing_final_newline(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = b"b = 1\na = 2"
+    _ = path.write_bytes(original)
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert (
+        result.stdout_bytes
+        == (
+            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n"
+            "+a = 2\n b = 1\n-a = 2\n\\ No newline at end of file\n"
+        ).encode()
+    )
+    assert path.read_bytes() == original
+
+
+def test_diff_marks_a_missing_final_newline_on_a_crlf_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = b"b = 1\r\na = 2"
+    _ = path.write_bytes(original)
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert (
+        result.stdout_bytes
+        == (
+            f"--- {path}\n+++ {path}\n@@ -1,2 +1,2 @@\n"
+            "+a = 2\r\n b = 1\r\n-a = 2\n\\ No newline at end of file\n"
+        ).encode()
+    )
+
+
+def test_diff_marks_an_unterminated_context_line() -> None:
+    # The sorter always ends a changed document with a newline, so only the
+    # renderer itself can reach a final line both sides leave unterminated.
+    rendered = toml_tidy.cli._render_diff(  # pyright: ignore[reportPrivateUsage]
+        Path("config.toml"), "b = 1\na = 2", "c = 3\na = 2"
+    )
+
+    assert rendered == (
+        b"--- config.toml\n+++ config.toml\n@@ -1,2 +1,2 @@\n"
+        b"-b = 1\n+c = 3\n a = 2\n\\ No newline at end of file\n"
+    )
+
+
+def test_diff_writes_an_undecodable_path_back_as_its_bytes() -> None:
+    # A non-UTF-8 filename reaches Python surrogate-escaped; the headers must
+    # carry the original bytes so patch finds the file, not raise on encode.
+    rendered = toml_tidy.cli._render_diff(  # pyright: ignore[reportPrivateUsage]
+        Path("\udcff.toml"), "b = 1\na = 2\n", "a = 2\nb = 1\n"
+    )
+
+    assert rendered.startswith(b"--- \xff.toml\n+++ \xff.toml\n")
+
+
+def test_diff_reports_an_undecodable_path_end_to_end(tmp_path: Path) -> None:
+    path = tmp_path / os.fsdecode(b"\xff.toml")
+    try:
+        _ = path.write_bytes(b"b = 1\na = 2\n")
+    except (OSError, UnicodeEncodeError):
+        pytest.skip("this filesystem refuses non-UTF-8 filenames")
+    later = tmp_path / "later.toml"
+    _ = later.write_bytes(b"d = 1\nc = 2\n")
+
+    result = CliRunner().invoke(app, [str(path), str(later), "--diff"])
+
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    assert result.stdout_bytes.startswith(
+        b"--- " + os.fsencode(path) + b"\n+++ " + os.fsencode(path) + b"\n"
+    )
+    assert b"--- " + os.fsencode(later) + b"\n" in result.stdout_bytes
+
+
+def test_diff_splits_lines_only_at_line_feeds(tmp_path: Path) -> None:
+    # str.splitlines would also break at U+2028 and U+0085, which a TOML
+    # comment may hold, and the hunk counts would no longer match the file.
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1 # x\u2028y\x85z\na = 2\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 1
+    assert "@@ -1,2 +1,2 @@\n+a = 2\n b = 1 # x\u2028y\x85z\n-a = 2\n" in result.stdout
+
+
+def test_diff_on_sorted_file_prints_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"a = 2\r\nb = 1\r\n")
+
+    result = CliRunner().invoke(app, [str(path), "--diff"])
+
+    assert result.exit_code == 0
+    assert result.stdout_bytes == b""
+
+
+def test_diff_multiple_paths_reports_errors_and_remaining_diffs(
+    tmp_path: Path,
+) -> None:
+    broken = tmp_path / "broken.toml"
+    _ = broken.write_text("key = [\n", encoding="utf-8")
+    sorted_file = tmp_path / "sorted.toml"
+    _ = sorted_file.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    unsorted_file = tmp_path / "unsorted.toml"
+    _ = unsorted_file.write_text("d = 1\nc = 2\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, [str(broken), str(sorted_file), str(unsorted_file), "--diff"]
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{broken}: ")
+    assert result.stdout == (
+        f"--- {unsorted_file}\n+++ {unsorted_file}\n"
+        "@@ -1,2 +1,2 @@\n+c = 2\n d = 1\n-c = 2\n"
+    )
+    assert unsorted_file.read_text(encoding="utf-8") == "d = 1\nc = 2\n"
+
+
+def test_diff_multiple_paths_exits_one_when_any_file_would_change(
+    tmp_path: Path,
+) -> None:
+    sorted_file = tmp_path / "a.toml"
+    _ = sorted_file.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    unsorted_file = tmp_path / "b.toml"
+    _ = unsorted_file.write_text("d = 1\nc = 2\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(sorted_file), str(unsorted_file), "--diff"])
+
+    assert result.exit_code == 1
+    assert result.stdout.startswith(f"--- {unsorted_file}\n")
+
+
+@pytest.mark.parametrize("other", ["--in-place", "--check"])
+def test_diff_cannot_be_combined_with_another_mode(tmp_path: Path, other: str) -> None:
+    path = tmp_path / "config.toml"
+    original = b"b = 1\na = 2\n"
+    _ = path.write_bytes(original)
+
+    result = CliRunner().invoke(app, [str(path), "--diff", other])
+
+    assert result.exit_code == 2
+    assert "--diff cannot be used with --in-place or --check" in _ANSI_CODES.sub(
+        "", result.stderr
+    )
+    assert path.read_bytes() == original
+
+
+def test_in_place_with_check_keeps_its_own_message(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, [str(path), "--in-place", "--check", "--diff"])
+
+    assert result.exit_code == 2
+    assert "--in-place and --check cannot be used together" in _ANSI_CODES.sub(
+        "", result.stderr
+    )

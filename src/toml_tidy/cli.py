@@ -2,6 +2,7 @@
 
 import ctypes
 import ctypes.util
+import difflib
 import errno
 import os
 import re
@@ -25,9 +26,11 @@ from toml_tidy.sorter import OrderMode, Scope, sort_toml
 
 app = typer.Typer(help="Sort TOML keys while preserving table hierarchy.")
 _MUTUALLY_EXCLUSIVE_OPTIONS: Final = "--in-place and --check cannot be used together"
+_DIFF_EXCLUSIVE_OPTIONS: Final = "--diff cannot be used with --in-place or --check"
 _MULTIPLE_PATHS_NEED_MODE: Final = (
-    "multiple paths require --in-place or --check; stdout output takes one path"
+    "multiple paths require --diff, --in-place or --check; stdout output takes one path"
 )
+_NO_NEWLINE_MARKER: Final = "\\ No newline at end of file\n"
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset(
     {"order", "scope", "first", "blank-lines", "line-width"}
@@ -250,6 +253,42 @@ def _apply_linesep(content: str, linesep: str) -> str:
     return content
 
 
+def _split_patch_lines(content: str) -> list[str]:
+    """Split on LF alone, keeping each ending, the way ``patch`` counts lines.
+
+    ``str.splitlines`` would also break at characters such as U+0085 and
+    U+2028 that TOML strings and comments may hold, which would make the
+    hunk line counts disagree with the file ``patch`` reads.
+    """
+    lines = [f"{line}\n" for line in content.split("\n")]
+    lines[-1] = lines[-1].removesuffix("\n")
+    if not lines[-1]:
+        _ = lines.pop()
+    return lines
+
+
+def _render_diff(path: Path, before: str, after: str) -> bytes:
+    """Render a unified diff that ``patch`` applies to the file at ``path``.
+
+    Each line keeps its own ending, so a CRLF file's diff carries CRLF
+    content lines. ``difflib`` emits a final line that lacks a newline as-is;
+    the standard marker is added after it so the hunk stays well formed.
+    A non-UTF-8 filename arrives surrogate-escaped, so ``surrogateescape``
+    writes its original bytes into the headers instead of raising.
+    """
+    rendered: list[str] = []
+    for line in difflib.unified_diff(
+        _split_patch_lines(before),
+        _split_patch_lines(after),
+        fromfile=str(path),
+        tofile=str(path),
+    ):
+        rendered.append(line)
+        if not line.endswith("\n"):
+            rendered.extend(("\n", _NO_NEWLINE_MARKER))
+    return "".join(rendered).encode("utf-8", "surrogateescape")
+
+
 def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> None:
     """Rewrite an existing inode when replacement cannot preserve security metadata.
 
@@ -374,6 +413,7 @@ def sort_file(
     paths: Annotated[list[Path], typer.Argument()],
     in_place: Annotated[bool, typer.Option("--in-place")] = False,
     check: Annotated[bool, typer.Option("--check")] = False,
+    diff: Annotated[bool, typer.Option("--diff")] = False,
     order: Annotated[OrderMode | None, typer.Option("--order")] = None,
     scope: Annotated[Scope | None, typer.Option("--scope")] = None,
     blank_lines: Annotated[
@@ -384,9 +424,11 @@ def sort_file(
     """Sort TOML keys while preserving table hierarchy."""
     if in_place and check:
         raise typer.BadParameter(_MUTUALLY_EXCLUSIVE_OPTIONS)
+    if diff and (in_place or check):
+        raise typer.BadParameter(_DIFF_EXCLUSIVE_OPTIONS)
     # Concatenated documents on stdout have no boundaries, so a redirect
     # would silently merge them into one invalid TOML file.
-    if len(paths) > 1 and not (in_place or check):
+    if len(paths) > 1 and not (in_place or check or diff):
         raise typer.BadParameter(_MULTIPLE_PATHS_NEED_MODE)
 
     exit_code = 0
@@ -397,6 +439,7 @@ def sort_file(
                 path,
                 in_place=in_place,
                 check=check,
+                diff=diff,
                 order=order,
                 scope=scope,
                 blank_lines=blank_lines,
@@ -412,12 +455,13 @@ def _process_file(
     *,
     in_place: bool,
     check: bool,
+    diff: bool,
     order: OrderMode | None,
     scope: Scope | None,
     blank_lines: bool | None,
     line_width: int | None,
 ) -> int:
-    """Sort one file and return its exit code (0 ok, 1 check diff, 2 error)."""
+    """Sort one file and return its exit code (0 ok, 1 would change, 2 error)."""
     try:
         settings = _resolve_settings(path, order, scope, blank_lines, line_width)
     except _ConfigError as error:
@@ -444,10 +488,15 @@ def _process_file(
         typer.echo(f"{path}: {error}", err=True)
         return 2
 
-    if check:
-        return 1 if source != sorted_source else 0
-
     output = _apply_linesep(sorted_source, linesep)
+
+    if check or diff:
+        changed = source != sorted_source
+        if diff and changed:
+            # Against the raw bytes and the restored output, never the
+            # LF-normalized forms, so a CRLF file's diff applies to that file.
+            typer.echo(_render_diff(path, raw_source, output), nl=False)
+        return 1 if changed else 0
 
     if in_place:
         if source != sorted_source:
