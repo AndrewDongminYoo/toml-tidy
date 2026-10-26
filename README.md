@@ -66,11 +66,11 @@ With multiple paths the worst exit code wins: `2` for any error, else `1` for an
 
 ## Configuration
 
-Defaults can be set in the nearest `pyproject.toml` found walking up from each target file, under `[tool.toml-tidy]`.
+Defaults can be set in a `.toml-tidy.toml` or `toml-tidy.toml` file, with the keys at the top level, or under `[tool.toml-tidy]` in a `pyproject.toml`.
 CLI flags always override the configuration.
 
 ```toml
-[tool.toml-tidy]
+# toml-tidy.toml
 order = "natural"   # "alpha" | "version"
 scope = "all"       # "tables" | "keys"
 first = ["project", "build-system"]
@@ -80,7 +80,21 @@ line-width = 88     # omit to leave array layout alone
 
 `first` pins top-level entries by name, in the listed order, ahead of their sorted siblings; it never applies inside nested tables, and it has no CLI flag.
 
-Unknown keys in `[tool.toml-tidy]` are rejected so configuration typos cannot silently fall back to defaults.
+Unknown keys are rejected so configuration typos cannot silently fall back to defaults.
+
+Discovery follows [Ruff's rules](https://docs.astral.sh/ruff/configuration/#config-file-discovery):
+
+- Each target file uses the closest configuration file found walking up from its directory to the filesystem root.
+- In one directory, `.toml-tidy.toml` wins over `toml-tidy.toml`, which wins over `pyproject.toml`.
+  A dedicated file applies even when it is empty.
+- A `pyproject.toml` counts only when it contains a `[tool.toml-tidy]` table; one without the table is skipped and the walk continues upward, so a sub-package's `pyproject.toml` does not hide the root configuration.
+- Settings are never merged: the closest file is used, and every file above it, or a `[tool.toml-tidy]` table beside a winning dedicated file, is ignored.
+- `--config <path>` uses the given dedicated file or `pyproject.toml` for every target and skips discovery.
+  A `pyproject.toml` without the table means the defaults.
+  A missing or invalid `--config` file exits with status `2` before any target is processed.
+- When the hierarchy holds no configuration file, the first existing file among `.toml-tidy.toml`, `toml-tidy.toml` and `pyproject.toml` in the user-level `toml-tidy` directory applies; if there is none, or that directory cannot be located or searched, the defaults apply.
+  On Linux and macOS that directory is `$XDG_CONFIG_HOME/toml-tidy` when `XDG_CONFIG_HOME` is an absolute path, else `~/.config/toml-tidy`.
+  On Windows it is `%APPDATA%\toml-tidy`, else `~\AppData\Roaming\toml-tidy`.
 
 ## pre-commit
 
