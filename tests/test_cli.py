@@ -849,6 +849,33 @@ def test_cli_order_flag_overrides_config(tmp_path: Path) -> None:
     assert result.output == "item2 = 1\nitem10 = 2\n"
 
 
+def test_standard_output_when_version_order_is_selected(tmp_path: Path) -> None:
+    path = tmp_path / "Cargo.toml"
+    _ = path.write_text("item1 = 1\nitem_a = 2\nItem = 3\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--order", "version"])
+
+    assert result.exit_code == 0
+    assert result.output == "Item = 3\nitem_a = 2\nitem1 = 1\n"
+
+
+def test_config_version_order_is_read_from_pyproject(  # trufflehog:ignore
+    tmp_path: Path,
+) -> None:
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[tool.toml-tidy]\norder = "version"\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("v0 = 1\nv00 = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == "v00 = 2\nv0 = 1\n"
+
+
 def test_config_scope_is_read_from_pyproject(  # trufflehog:ignore
     tmp_path: Path,
 ) -> None:

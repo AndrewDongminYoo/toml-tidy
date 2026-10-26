@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide a command-line tool that alphabetically or naturally sorts keys inside each TOML table while preserving the document hierarchy, comments, and existing formatting as far as `tomlkit` permits.
+Provide a command-line tool that alphabetically, naturally, or by Rust-style version order sorts keys inside each TOML table while preserving the document hierarchy, comments, and existing formatting as far as `tomlkit` permits.
 
 ## Scope
 
@@ -32,7 +32,9 @@ With multiple paths the command processes every file and returns the worst exit 
 
 `--order natural` is the default and compares consecutive decimal digits numerically while otherwise using case-insensitive text.
 
-Both order modes compare a key's parsed logical value, not its source spelling.
+`--order version` uses the Rust style guide's version sorting as rustfmt's `version_sort` implements it, except that each `_` sorts immediately after a space and before any other character as the guide states (rustfmt puts it first): case-sensitive code points, ASCII digit runs compared numerically, and more leading zeros first when everything else ties.
+
+All order modes compare a key's parsed logical value, not its source spelling.
 
 For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and `omo` while retaining their original quoted or bare syntax in output.
 
@@ -42,14 +44,14 @@ For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and 
 
 `toml_tidy.sorter.sort_toml` leaves argument-domain validation to its caller for every parameter:
 
-| Parameter     | Caller-supplied domain                                   |
-| ------------- | -------------------------------------------------------- |
-| `source`      | A `str` containing TOML source; parser errors propagate. |
-| `order`       | `OrderMode.NATURAL` or `OrderMode.ALPHA`.                |
-| `scope`       | `Scope.ALL`, `Scope.TABLES`, or `Scope.KEYS`.            |
-| `first`       | A tuple of strings naming top-level entries to pin.      |
-| `blank_lines` | A `bool`.                                                |
-| `line_width`  | `None` or a positive integer, excluding `bool`.          |
+| Parameter     | Caller-supplied domain                                          |
+| ------------- | --------------------------------------------------------------- |
+| `source`      | A `str` containing TOML source; parser errors propagate.        |
+| `order`       | `OrderMode.NATURAL`, `OrderMode.ALPHA`, or `OrderMode.VERSION`. |
+| `scope`       | `Scope.ALL`, `Scope.TABLES`, or `Scope.KEYS`.                   |
+| `first`       | A tuple of strings naming top-level entries to pin.             |
+| `blank_lines` | A `bool`.                                                       |
+| `line_width`  | `None` or a positive integer, excluding `bool`.                 |
 
 The function performs no runtime argument validation and guarantees no particular behavior or exception for values outside these domains.
 Type annotations and static checking help typed callers, but `int | None` cannot enforce positivity or exclude Python's `bool` subclass of `int`.
@@ -123,7 +125,7 @@ A missing or unreadable path (including a directory) reports `{path}: {message}`
 
 ## Tests
 
-Unit tests cover alpha and natural ordering, case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, arrays of tables, scope-limited sorting, and `first` pinning.
+Unit tests cover alpha, natural, and version ordering (including the Rust style guide's example list), case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, arrays of tables, scope-limited sorting, and `first` pinning.
 
 CLI tests cover standard output, check-mode exit codes, in-place rewriting, invalid TOML without mutation, multi-path aggregation, and `[tool.toml-tidy]` configuration resolution including CLI override and invalid values.
 
