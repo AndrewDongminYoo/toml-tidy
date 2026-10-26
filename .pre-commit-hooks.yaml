@@ -6,4 +6,8 @@
   # Overridable in .pre-commit-config.yaml; --in-place stays in entry so a
   # user override cannot drop it and turn the hook into a stdout dump.
   args: []
+  # identify tags uv.lock, poetry.lock and Cargo.lock as toml too; a file must
+  # match both files and types, so generated lockfiles never reach the hook.
+  # Pipfile is the one toml-tagged name without a .toml suffix that is kept.
+  files: (?i)(\.toml|(^|/)Pipfile)$
   types: [toml]
