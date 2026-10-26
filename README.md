@@ -92,8 +92,9 @@ The hook runs `toml-tidy --in-place`, and `args` are appended to it, so flags ar
 hooks:
   - id: toml-tidy
     args: [--blank-lines, --order, alpha]
-    exclude: ^uv\.lock$ # lockfiles are TOML too
 ```
+
+From the first release after v0.6.0, the hook only runs on files ending in `.toml` and on `Pipfile`, so generated lockfiles such as `uv.lock`, `poetry.lock` and `Cargo.lock` are left alone without an `exclude`.
 
 ## Trunk
 
