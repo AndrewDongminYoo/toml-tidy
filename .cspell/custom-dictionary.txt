@@ -3,6 +3,7 @@ addopts
 aots
 autouse
 basedpyright
+capsysbinary
 DACL
 delenv
 docstrings
@@ -23,7 +24,10 @@ setgid
 setid
 setxattr
 subtables
+surrogateescape
 testpaths
+tofile
+udcff
 WRONLY
 XATTR
 ZYXW
