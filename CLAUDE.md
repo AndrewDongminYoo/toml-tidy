@@ -10,17 +10,19 @@ Python 3.13, managed with `uv`, packaged with `uv_build`.
 ## Commands
 
 ```bash
-uv sync                                # install deps (dev group included)
-uv run pytest                          # run all tests
-uv run pytest tests/test_sorter.py -k <name>   # run a single test
+uv sync --locked                       # install locked deps (dev group included)
+uv run --no-sync pytest                 # run all tests with the synced deps
+uv run --no-sync pytest tests/test_sorter.py -k <name> # run a single test
 uv run ruff check src tests           # lint (select = ALL)
-uv run ruff format src tests          # format
+uv run ruff format --check src tests  # check formatting
 uv run basedpyright                   # type check (typeCheckingMode = all)
-trunk check                           # full lint suite (pre-push hook runs this)
+trunk check --all --no-fix --jobs=2    # full local lint suite
 uv run toml-tidy <file>  # run the CLI
 ```
 
 `pytest` runs with `filterwarnings = ["error"]` — any warning fails the test.
+The pre-push hook runs Trunk's changed-file checks.
+Trunk's Ruff integration runs linting, so its result does not replace the separate `ruff format --check` gate used by CI.
 
 ## Architecture
 
@@ -53,4 +55,4 @@ Key invariants (documented in `docs/specs/2026-07-16-hierarchical-toml-sort-desi
 
 - Ruff runs with `select = ["ALL"]` and a short ignore list in `pyproject.toml`; docstrings follow Google convention. Tests get relaxed per-file ignores.
 - basedpyright runs in `all` mode — new code must be fully typed (uses PEP 695 `type` aliases, `StrEnum`, `match` statements).
-- Design/plan docs live in `docs/specs/` and `docs/superpowers/plans/`; behavior changes should stay consistent with the spec or update it.
+- Design/plan docs live in `docs/specs/` and `docs/plans/`; behavior changes should stay consistent with the spec or update it.
