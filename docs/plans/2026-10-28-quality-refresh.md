@@ -14,11 +14,14 @@
 2. Project behavior and static quality → verify: the declared Python gates and the two CI `tomlkit` overrides.
 3. Full tool and security coverage → verify: no-fix Trunk output and direct OSV Scanner 2.7.0 output naming the actual lockfile.
 4. Knowledge consistency → verify: checked commands, paths, metadata URLs, and internal links in `knowledge-audit.json` in the visible review folder.
+5. Filesystem secret reader → verify: the inherited reader fails the encoded regression, the local reader passes 10 tests, and direct encoded, literal and clean scanner controls preserve findings.
+6. Reader copy integrity → verify: AST equality with the source reader and tests after initial standard-library import ordering and explicit-file formatting.
 
 ## Declared Gates
 
 - `uv sync --locked`
 - `uv run --no-sync pytest`
+- `uv run --no-sync python -m unittest discover -s .trunk/configs/tests -v`
 - `uv run ruff check src tests`
 - `uv run ruff format --check src tests`
 - `uv run basedpyright`

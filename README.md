@@ -216,6 +216,7 @@ Run the same quality gates enforced by CI before committing:
 ```bash
 uv sync --locked
 uv run --no-sync pytest
+uv run --no-sync python -m unittest discover -s .trunk/configs/tests -v
 uv run ruff check src tests
 uv run ruff format --check src tests
 uv run basedpyright
@@ -224,6 +225,7 @@ uv run basedpyright
 CI runs the test suite on Python 3.12 and 3.13 against `tomlkit` 0.15.0 and 0.15.1 because the sorter intentionally isolates a dependency on `tomlkit`'s private container representation.
 The commands above test the locked dependency set; CI replaces `tomlkit` with each explicit matrix version before running the tests.
 Run `trunk check --all --no-fix --jobs=2` for the full local tool suite; Trunk's Ruff integration runs linting, so the separate Ruff format check above remains required.
+TruffleHog runs offline with `--no-verification --no-update`; its filesystem reader preserves decoded findings when their original values do not appear literally in a file.
 
 ## Releasing
 

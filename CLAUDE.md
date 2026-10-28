@@ -12,6 +12,7 @@ Python 3.13, managed with `uv`, packaged with `uv_build`.
 ```bash
 uv sync --locked                       # install locked deps (dev group included)
 uv run --no-sync pytest                 # run all tests with the synced deps
+uv run --no-sync python -m unittest discover -s .trunk/configs/tests -v # test the secret reader
 uv run --no-sync pytest tests/test_sorter.py -k <name> # run a single test
 uv run ruff check src tests           # lint (select = ALL)
 uv run ruff format --check src tests  # check formatting

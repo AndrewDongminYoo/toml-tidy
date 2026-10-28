@@ -20,6 +20,7 @@ minversion
 nomo
 pathconf
 repros
+sarif
 setgid
 setid
 setxattr
