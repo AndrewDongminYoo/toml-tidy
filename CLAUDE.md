@@ -57,3 +57,12 @@ Key invariants (documented in `docs/specs/2026-07-16-hierarchical-toml-sort-desi
 - Ruff runs with `select = ["ALL"]` and a short ignore list in `pyproject.toml`; docstrings follow Google convention. Tests get relaxed per-file ignores.
 - basedpyright runs in `all` mode — new code must be fully typed (uses PEP 695 `type` aliases, `StrEnum`, `match` statements).
 - Design/plan docs live in `docs/specs/` and `docs/plans/`; behavior changes should stay consistent with the spec or update it.
+
+## Offline scanner resource boundary
+
+Run `python3 -B .trunk/configs/tests/test_trufflehog_to_sarif.py` for the 17 command-line reader regressions.
+Source context is limited to 1 MiB plus a sentinel byte per read and at most eight cached files.
+Oversized, unreadable, binary or decoded-only findings retain file-level diagnostics instead of disappearing.
+Native Trunk paths and Unicode code-point columns are preserved.
+The large-source and multi-file regressions measure traced Python allocations on ASCII fixtures; they do not establish a universal process RSS or I/O timeout bound.
+Malformed scanner input fails the gate, and candidate credentials are never verified with a provider.

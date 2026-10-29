@@ -14,7 +14,7 @@
 2. Project behavior and static quality → verify: the declared Python gates and the two CI `tomlkit` overrides.
 3. Full tool and security coverage → verify: no-fix Trunk output and direct OSV Scanner 2.7.0 output naming the actual lockfile.
 4. Knowledge consistency → verify: checked commands, paths, metadata URLs, and internal links in `knowledge-audit.json` in the visible review folder.
-5. Filesystem secret reader → verify: the inherited reader fails the encoded regression, the local reader passes 10 tests, and direct encoded, literal and clean scanner controls preserve findings.
+5. Filesystem secret reader → verify: the inherited reader fails the encoded regression, the local reader passes 17 tests, and direct encoded, literal and clean scanner controls preserve findings.
 6. Reader copy integrity → verify: AST equality with the source reader and tests after initial standard-library import ordering and explicit-file formatting.
 
 ## Declared Gates
@@ -26,3 +26,12 @@
 - `uv run ruff format --check src tests`
 - `uv run basedpyright`
 - `trunk check --all --no-fix --jobs=2`
+
+## Offline scanner resource boundary
+
+Run `python3 -B .trunk/configs/tests/test_trufflehog_to_sarif.py` for the 17 command-line reader regressions.
+Source context is limited to 1 MiB plus a sentinel byte per read and at most eight cached files.
+Oversized, unreadable, binary or decoded-only findings retain file-level diagnostics instead of disappearing.
+Native Trunk paths and Unicode code-point columns are preserved.
+The large-source and multi-file regressions measure traced Python allocations on ASCII fixtures; they do not establish a universal process RSS or I/O timeout bound.
+Malformed scanner input fails the gate, and candidate credentials are never verified with a provider.
