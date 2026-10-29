@@ -21,8 +21,8 @@ classifiers = [
 dependencies = ["tomlkit>=0.15.0,<0.16", "typer>=0.16,<1"]
 
 [project.urls]
-Repository = "https://github.com/AndrewDongminYoo/toml_tidy"
-Issues = "https://github.com/AndrewDongminYoo/toml_tidy/issues"
+Repository = "https://github.com/AndrewDongminYoo/toml-tidy"
+Issues = "https://github.com/AndrewDongminYoo/toml-tidy/issues"
 
 [project.scripts]
 toml-tidy = "toml_tidy.cli:app"
