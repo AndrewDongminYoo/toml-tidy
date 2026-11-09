@@ -2,7 +2,7 @@
 # To learn more about the format of this file, see https://docs.trunk.io/reference/trunk-yaml
 version: 0.1
 cli:
-  version: 1.25.0
+  version: 1.29.0
   options:
     - commands: [ALL]
       args: --monitor=false
@@ -22,9 +22,6 @@ runtimes:
     - python@3.14.4
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
-  files:
-    - name: uv-lockfile
-      filenames: [uv.lock]
   definitions:
     - name: osv-scanner
       files: [lockfile, uv-lockfile]
@@ -42,21 +39,23 @@ lint:
   enabled:
     - actionlint@1.7.12
     - black@26.10.1
-    - checkov@3.3.30
-    - cspell@10.4.0
+    - checkov@3.4.3
+    - cspell@10.4.1
     - git-diff-check
-    - grype@0.121.0
+    - grype@0.121.2
     - isort@9.0.2
     - markdownlint@0.50.0
     - osv-scanner@2.7.0
     - oxipng@10.2.1
-    - pinact@4.1.1!:
-        commands: [lint, upgrade]
+    - pinact@4.1.1!
     - prettier@3.9.10
-    - ruff@0.17.3
+    - ruff@0.17.4
     - taplo@0.10.0
-    - trufflehog@3.99.7
+    - trufflehog@3.99.8
     - yamllint@1.38.0
+  files:
+    - name: uv-lockfile
+      filenames: [uv.lock]
 actions:
   disabled:
     - trunk-fmt-pre-commit
