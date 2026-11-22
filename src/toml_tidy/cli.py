@@ -38,6 +38,11 @@ _AMBIGUOUS_DIFF_PATH: Final = (
     "character, or a leading double quote)"
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
+# C0 and C1 controls (TAB, line breaks, ESC, DEL), the Unicode line and
+# paragraph separators, and the surrogates an undecodable filename byte
+# arrives as: each can split one error into several lines or drive the
+# terminal, so `_report` prints them as escapes.
+_UNPRINTABLE: Final = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")
 _CONFIG_KEYS: Final = frozenset(
     {"blank-lines", "first", "line-width", "order", "overrides", "scope"}
 )
@@ -573,13 +578,24 @@ def _patch_reads_back(name: str) -> bool:
     )
 
 
+def _report(message: str) -> None:
+    r"""Print one error line to stderr with control characters escaped.
+
+    A path or exception text can hold any character a filename can, so each
+    one ``_UNPRINTABLE`` matches is written as its ``repr`` escape (``\t``,
+    ``\x1b``, ``\u2028``, ``\udcff``) and the error stays one physical line.
+    """
+    escaped = _UNPRINTABLE.sub(lambda match: repr(match.group())[1:-1], message)
+    typer.echo(escaped, err=True)
+
+
 def _print_diff(path: Path, before: str, after: str) -> int:
     """Print the diff for ``path`` and return 1, or report it and return 2.
 
     A path that ``patch`` would read back as another name gets no diff.
     """
     if not _patch_reads_back(str(path)):
-        typer.echo(f"{path}: {_AMBIGUOUS_DIFF_PATH}", err=True)
+        _report(f"{path}: {_AMBIGUOUS_DIFF_PATH}")
         return 2
     typer.echo(_render_diff(path, before, after), nl=False)
     return 1
@@ -740,7 +756,7 @@ def sort_file(
                 config, section, order, scope, blank_lines, line_width
             )
         except _ConfigError as error:
-            typer.echo(str(error), err=True)
+            _report(str(error))
             raise typer.Exit(code=2) from None
 
     discovery = _Discovery()
@@ -788,7 +804,7 @@ def _process_file(
                 config, section, order, scope, blank_lines, line_width
             )
         except _ConfigError as error:
-            typer.echo(str(error), err=True)
+            _report(str(error))
             return 2
 
     try:
@@ -809,7 +825,7 @@ def _process_file(
             overrides=settings.overrides,
         )
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
-        typer.echo(f"{path}: {error}", err=True)
+        _report(f"{path}: {error}")
         return 2
 
     output = _apply_linesep(sorted_source, linesep)
@@ -827,7 +843,7 @@ def _process_file(
             try:
                 _atomic_write(path, output)
             except OSError as error:
-                typer.echo(f"{path}: {error}", err=True)
+                _report(f"{path}: {error}")
                 return 2
         return 0
 

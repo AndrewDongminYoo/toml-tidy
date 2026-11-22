@@ -1921,21 +1921,21 @@ def test_diff_names_an_undecodable_path_through_the_header_guard(
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("name", "shown"),
     [
-        "a\tb.toml",
-        "a\nb.toml",
-        "a\rb.toml",
-        '"a.toml',
-        "config.toml ",
-        " config.toml",
-        "a\x0bb.toml",
-        "config.toml\u2028",
-        "config.toml\xa0",
+        ("a\tb.toml", "a\\tb.toml"),
+        ("a\nb.toml", "a\\nb.toml"),
+        ("a\rb.toml", "a\\rb.toml"),
+        ('"a.toml', '"a.toml'),
+        ("config.toml ", "config.toml "),
+        (" config.toml", " config.toml"),
+        ("a\x0bb.toml", "a\\x0bb.toml"),
+        ("config.toml\u2028", "config.toml\\u2028"),
+        ("config.toml\xa0", "config.toml\xa0"),
     ],
 )
 def test_diff_refuses_a_path_patch_cannot_read_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, shown: str
 ) -> None:
     # A header name must come back from patch as exactly that name. patch
     # strips surrounding whitespace, ends a name at a TAB or line break, and
@@ -1953,13 +1953,69 @@ def test_diff_refuses_a_path_patch_cannot_read_back(
 
     assert result.exit_code == 2
     assert result.stderr == (
-        f"{path}: --diff cannot name this path in a patch header: patch would "
+        f"{shown}: --diff cannot name this path in a patch header: patch would "
         "not read it back as exactly this name (leading or trailing whitespace, "
         "a control character, or a leading double quote)\n"
     )
     assert result.stdout.startswith(f"--- {later}\t\n")
     assert str(path) not in result.stdout
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("a\nb.toml", "a\\nb.toml"),
+        ("a\rb.toml", "a\\rb.toml"),
+        ("a\tb.toml", "a\\tb.toml"),
+        ("\x1b[31ma.toml", "\\x1b[31ma.toml"),
+        ("a\x85b.toml", "a\\x85b.toml"),
+        ("a\u2029b.toml", "a\\u2029b.toml"),
+        ("a\u200db.toml", "a\u200db.toml"),
+    ],
+)
+def test_parse_error_prints_a_control_character_escaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, shown: str
+) -> None:
+    # One error must stay one stderr line whatever the file name holds.
+    monkeypatch.chdir(tmp_path)
+    _ = Path(name).write_bytes(b"a = \n")
+
+    result = CliRunner().invoke(app, [name])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{shown}: ")
+    assert result.stderr.count("\n") == 1
+    assert result.stderr.endswith("\n")
+    assert "\x1b" not in result.stderr
+
+
+def test_config_error_prints_a_control_character_escaped(tmp_path: Path) -> None:
+    directory = tmp_path / "a\nb"
+    directory.mkdir()
+    _ = (directory / ".toml-tidy.toml").write_text("order = 1\n")
+    _ = (directory / "x.toml").write_text("a = 1\n")
+
+    result = CliRunner().invoke(app, [str(directory / "x.toml")])
+
+    assert result.exit_code == 2
+    assert result.stderr.count("\n") == 1
+    assert "a\\nb" in result.stderr
+
+
+def test_error_escapes_an_undecodable_filename_byte(
+    capsysbinary: pytest.CaptureFixture[bytes],
+) -> None:
+    # A non-UTF-8 byte reaches Python surrogate-escaped. Called directly so it
+    # runs where the filesystem refuses such a name.
+    status = toml_tidy.cli._print_diff(  # pyright: ignore[reportPrivateUsage]
+        Path("\udcff\n.toml"), "b = 1\na = 2\n", "a = 2\nb = 1\n"
+    )
+
+    assert status == 2
+    err = capsysbinary.readouterr().err
+    assert err.startswith(b"\\udcff\\n.toml: ")
+    assert err.count(b"\n") == 1
 
 
 def test_diff_keeps_an_inner_double_quote_in_the_header(tmp_path: Path) -> None:
