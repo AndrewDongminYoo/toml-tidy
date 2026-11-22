@@ -850,6 +850,13 @@ def test_override_output_keeps_data_and_is_idempotent(
     scope: Scope,
     blank_lines: bool,
 ) -> None:
+    # tomlkit 0.15.0, the supported floor, rejects some of these valid split
+    # declarations as duplicate keys; 0.15.1 parses them.
+    try:
+        _ = tomlkit.parse(source)
+    except TOMLKitError:
+        pytest.skip("this tomlkit cannot parse the split-table source")
+
     result = sort_toml(
         source, scope=scope, overrides=overrides, blank_lines=blank_lines
     )
