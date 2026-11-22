@@ -1,9 +1,11 @@
+import tomllib
+
 import pytest
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from toml_tidy import sorter
-from toml_tidy.sorter import OrderMode, Scope, sort_toml
+from toml_tidy.sorter import OrderMode, Override, Scope, sort_toml
 
 _sort_document = sorter._sort_document  # pyright: ignore[reportPrivateUsage]
 _sort_key = sorter._sort_key  # pyright: ignore[reportPrivateUsage]
@@ -676,6 +678,246 @@ def test_first_does_not_pin_nested_tables() -> None:
     result = sort_toml(source, first=("project",))
 
     assert result == "[z]\n[z.a]\nk = 1\n[z.project]\nm = 1\n"
+
+
+_CARGO = (
+    '[package]\ndescription = "d"\nauthors = []\nversion = "1"\nname = "x"\n'
+    "[dependencies]\nz = 1\na = 2\n"
+)
+_CARGO_OVERRIDE = (Override(("package",), ("name", "version"), ("description",)),)
+
+
+def test_override_pins_first_and_last_in_matched_table() -> None:
+    result = sort_toml(_CARGO, overrides=_CARGO_OVERRIDE)
+
+    assert result == (
+        "[dependencies]\na = 2\nz = 1\n"
+        '[package]\nname = "x"\nversion = "1"\nauthors = []\ndescription = "d"\n'
+    )
+    assert sort_toml(result, overrides=_CARGO_OVERRIDE) == result
+
+
+def test_override_reaches_a_table_declared_under_super_tables() -> None:
+    source = (
+        '[tool.poetry.dependencies]\nrequests = "*"\npython = "^3.13"\nattrs = "*"\n'
+    )
+    overrides = (Override(("tool", "poetry", "dependencies"), ("python",)),)
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == (
+        '[tool.poetry.dependencies]\npython = "^3.13"\nattrs = "*"\nrequests = "*"\n'
+    )
+    assert sort_toml(result, overrides=overrides) == result
+
+
+def test_override_matches_parsed_keys_not_spelling() -> None:
+    source = '[plugins."omo-kit"]\nb = 1\na = 2\n[plugins.other]\nb = 1\na = 2\n'
+    overrides = (Override(("plugins", "omo-kit"), ("b",)),)
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == (
+        '[plugins."omo-kit"]\nb = 1\na = 2\n[plugins.other]\na = 2\nb = 1\n'
+    )
+
+
+def test_override_pins_dotted_keys_by_leading_segment() -> None:
+    source = "[t]\na = 1\nz.y = 2\nz.x = 3\n"
+
+    result = sort_toml(source, overrides=(Override(("t",), ("z",)),))
+
+    assert result == "[t]\nz.x = 3\nz.y = 2\na = 1\n"
+
+
+def test_override_glob_stays_within_one_segment() -> None:
+    source = "[a.b]\nz = 1\ny = 2\n[a.b.c]\nz = 1\ny = 2\n"
+
+    result = sort_toml(source, overrides=(Override(("a", "*"), ("z",)),))
+
+    assert result == "[a.b]\nz = 1\ny = 2\n[a.b.c]\ny = 2\nz = 1\n"
+
+
+def test_last_matching_override_wins_without_merging() -> None:
+    source = "[a]\nc = 1\nb = 2\na = 3\n"
+    overrides = (Override(("a",), ("c",)), Override(("*",), (), ("a",)))
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == "[a]\nb = 2\nc = 1\na = 3\n"
+
+
+def test_override_applies_to_every_aot_element() -> None:
+    source = "[[bin]]\npath = 'a'\nname = 'a'\n[[bin]]\npath = 'b'\nname = 'b'\n"
+
+    result = sort_toml(source, overrides=(Override(("bin",), (), ("path",)),))
+
+    assert result == (
+        "[[bin]]\nname = 'a'\npath = 'a'\n[[bin]]\nname = 'b'\npath = 'b'\n"
+    )
+
+
+@pytest.mark.parametrize("blank_lines", [False, True])
+def test_unsorted_override_keeps_own_body_but_sorts_children(
+    *, blank_lines: bool
+) -> None:
+    source = "[b]\nz = 1\n# y\n[b.y]\nq = 2\np = 1\n# x\n[b.x]\nk = 1\n[a]\nk = 1\n"
+    overrides = (Override(("b",), sort=False),)
+
+    result = sort_toml(source, overrides=overrides, blank_lines=blank_lines)
+
+    assert result.replace("\n\n", "\n") == (
+        "[a]\nk = 1\n[b]\nz = 1\n# y\n[b.y]\np = 1\nq = 2\n# x\n[b.x]\nk = 1\n"
+    )
+    assert sort_toml(result, overrides=overrides, blank_lines=blank_lines) == result
+
+
+def test_unsorted_override_keeps_pieces_of_one_table_together() -> None:
+    # Left apart, the two [[a.x]] pieces would reparse into a different shape.
+    source = "[a]\n[[a.x]]\nv=1\n[a.a.z]\nv=2\n[[a.x]]\nv=3\n"
+    overrides = (Override(("a",), sort=False),)
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == "[a]\n[[a.x]]\nv=1\n[[a.x]]\nv=3\n[a.a.z]\nv=2\n"
+    assert tomllib.loads(result) == tomllib.loads(source)
+    assert sort_toml(result, overrides=overrides) == result
+
+
+def test_unsorted_override_orders_pieces_of_one_table_by_path() -> None:
+    # The root folds [x] into the [[x.z]] piece, which puts [[x.z.b.x]] ahead
+    # of the array; it must follow the element it extends.
+    source = "[[x.z]]\nv=1\n[x]\n[[x.z.b.x]]\nv=2\n"
+    overrides = (Override(("x",), sort=False),)
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == "[x]\n[[x.z]]\nv=1\n[[x.z.b.x]]\nv=2\n"
+    assert tomllib.loads(result) == tomllib.loads(source)
+    assert sort_toml(result, overrides=overrides) == result
+
+
+@pytest.mark.parametrize(
+    ("source", "overrides", "scope"),
+    [
+        (
+            "[a.x.a]\n[c]\n[a]\nk=1\n[[a.z]]\n[a.x.x]\n[a.a]\n",
+            (Override(("a",), sort=False),),
+            Scope.ALL,
+        ),
+        (
+            "[a.z]\nv=1\n[c]\nv=2\n[a]\nk=1\n# b\n[a.b]\nv=3\n",
+            (Override(("a",), sort=False),),
+            Scope.ALL,
+        ),
+        (
+            "[[x.a.b]]\nv=1\n# c\n[[x.a.c]]\nv=2\n[y]\nk=1\n[[x.a.b]]\nv=3\n",
+            (Override(("x", "a"), sort=False),),
+            Scope.ALL,
+        ),
+        (
+            "[[x.a.b]]\nv=1\n[x.b.a]\nk=1\n[[x.a.c]]\nv=2\n[[x.a.b]]\nv=3\n",
+            (Override(("x",), sort=False),),
+            Scope.KEYS,
+        ),
+        (
+            "[[a.x.z]]\nv=1\n[a.x]\nv=2\n[[a.x.t]]\nv=3\n[a.y.z]\nv=4\n[[a.x.t]]\nv=5\n",
+            (Override(("a",), sort=False),),
+            Scope.KEYS,
+        ),
+        (
+            "".join(
+                f"{header}\nv={i}\n"
+                for i, header in enumerate(
+                    ("[[x.a.z]]", "[y.a]", "[x.b]", "[[x.a.z]]", "[y]", "[x.a.z.k]")
+                )
+            ),
+            (Override(("x", "a", "z"), first=("k",)),),
+            Scope.ALL,
+        ),
+        (
+            "[[x.a.z]]\nv=0\n[x.a]\nv=1\n[y.a]\nv=2\n[x.a.z.k]\nv=3\n",
+            (Override(("x",), sort=False),),
+            Scope.ALL,
+        ),
+    ],
+)
+@pytest.mark.parametrize("blank_lines", [False, True])
+def test_override_output_keeps_data_and_is_idempotent(
+    *,
+    source: str,
+    overrides: tuple[Override, ...],
+    scope: Scope,
+    blank_lines: bool,
+) -> None:
+    # tomlkit 0.15.0, the supported floor, rejects some of these valid split
+    # declarations as duplicate keys; 0.15.1 parses them.
+    try:
+        _ = tomlkit.parse(source)
+    except TOMLKitError:
+        pytest.skip("this tomlkit cannot parse the split-table source")
+
+    result = sort_toml(
+        source, scope=scope, overrides=overrides, blank_lines=blank_lines
+    )
+
+    assert tomlkit.parse(result).unwrap() == tomllib.loads(source)
+    assert tomllib.loads(result) == tomllib.loads(source)
+    again = sort_toml(result, scope=scope, overrides=overrides, blank_lines=blank_lines)
+    assert again == result
+
+
+def test_superseded_unsorted_override_has_no_effect() -> None:
+    source = "[t]\nb = 1\na = 2\n"
+    superseded = (Override(("t",), sort=False), Override(("t",)))
+
+    result = sort_toml(source, overrides=superseded)
+
+    assert result == "[t]\na = 2\nb = 1\n"
+
+
+def test_overrides_never_match_the_root() -> None:
+    result = sort_toml("b = 1\na = 2\n", overrides=(Override(("*",), sort=False),))
+
+    assert result == "a = 2\nb = 1\n"
+
+
+def test_override_name_in_first_and_last_is_pinned_first() -> None:
+    result = sort_toml(
+        "[t]\nb = 1\nc = 2\na = 3\n", overrides=(Override(("t",), ("a",), ("a",)),)
+    )
+
+    assert result == "[t]\na = 3\nb = 1\nc = 2\n"
+
+
+def test_unsorted_override_still_applies_its_pins() -> None:
+    source = "[t]\nb = 1\nd = 2\nc = 3\na = 4\n"
+
+    result = sort_toml(
+        source, overrides=(Override(("t",), ("a",), ("b",), sort=False),)
+    )
+
+    assert result == "[t]\na = 4\nd = 2\nc = 3\nb = 1\n"
+
+
+def test_unsorted_override_keeps_dotted_keys_of_one_prefix_adjacent() -> None:
+    source = "[t]\nz.y = 2\nb = 1\nz.x = 1\n"
+
+    result = sort_toml(source, overrides=(Override(("t",), sort=False),))
+
+    assert result == "[t]\nz.x = 1\nz.y = 2\nb = 1\n"
+
+
+def test_unsorted_override_places_pieces_above_the_header_after_its_entries() -> None:
+    # The root merge appends [x.z] after [x]'s own body; the contract counts
+    # that as where z first appears.
+    source = "[x.z]\nv=1\n[y]\nv=2\n[x]\nk=1\n[x.b]\nv=3\n"
+    overrides = (Override(("x",), sort=False),)
+
+    result = sort_toml(source, overrides=overrides)
+
+    assert result == "[x]\nk=1\n[x.b]\nv=3\n[x.z]\nv=1\n[y]\nv=2\n"
+    assert sort_toml(result, overrides=overrides) == result
 
 
 def test_scope_keys_split_aot_matches_tomlkit_roundtrip() -> None:

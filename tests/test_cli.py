@@ -974,6 +974,115 @@ def test_config_first_pins_top_level_tables(tmp_path: Path) -> None:
     assert result.output == "[project]\n[a]\n[b]\n"
 
 
+def test_config_override_orders_cargo_package(tmp_path: Path) -> None:
+    _ = (tmp_path / "toml-tidy.toml").write_text(
+        (
+            '[[overrides]]\npath = "package"\nfirst = ["name", "version"]\n'
+            'last = ["description"]\n'
+        ),
+        encoding="utf-8",
+    )
+    path = tmp_path / "Cargo.toml"
+    _ = path.write_text(
+        '[package]\ndescription = "d"\nedition = "2024"\nversion = "1"\nname = "x"\n',
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == (
+        '[package]\nname = "x"\nversion = "1"\nedition = "2024"\ndescription = "d"\n'
+    )
+
+
+def test_config_override_from_pyproject_pins_poetry_python(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    _ = path.write_text(
+        (
+            "[[tool.toml-tidy.overrides]]\n"
+            "path = 'tool . poetry.\"dependencies\"'\n"
+            'first = ["python"]\n'
+            "[tool.poetry.dependencies]\n"
+            'requests = "*"\npython = "^3.13"\nattrs = "*"\n'
+        ),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path), "--in-place"])
+    again = runner.invoke(app, [str(path), "--check"])
+
+    assert (result.exit_code, again.exit_code) == (0, 0)
+    assert path.read_text(encoding="utf-8") == (
+        '[tool.poetry.dependencies]\npython = "^3.13"\nattrs = "*"\nrequests = "*"\n'
+        "[[tool.toml-tidy.overrides]]\n"
+        'first = [ "python" ]\n'
+        "path = 'tool . poetry.\"dependencies\"'\n"
+    )
+
+
+def test_config_override_bracket_class_is_one_segment(tmp_path: Path) -> None:
+    _ = (tmp_path / "toml-tidy.toml").write_text(
+        '[[overrides]]\npath = "a.[.b]"\nfirst = ["z"]\n', encoding="utf-8"
+    )
+    path = tmp_path / "config.toml"
+    _ = path.write_text("[a.b]\nz = 1\ny = 2\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 0
+    assert result.output == "[a.b]\nz = 1\ny = 2\n"
+
+
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        ('path = "a"\norder = "alpha"', "overrides[0]: unknown key(s): 'order'"),
+        ('first = ["b"]', "overrides[0]: path is required"),
+        ("path = 1", "overrides[0].path must be a string"),
+        ('path = "a."', "overrides[0].path is not a dotted key pattern"),
+        ('path = "a b"', "overrides[0].path is not a dotted key pattern"),
+        ('path = "a.**"', "overrides[0].path does not support '**'"),
+        ('path = "a"\nfirst = "b"', "overrides[0].first must be a list of strings"),
+        ('path = "a"\nlast = [1]', "overrides[0].last must be a list of strings"),
+        ('path = "a"\nsort = "no"', "overrides[0].sort must be a boolean"),
+        ('path = "a.[b"', "overrides[0].path has an unclosed '['"),
+        ("path = '\"a[b\"'", "overrides[0].path has an unclosed '['"),
+        ('path = "a.]"', "overrides[0].path is not a dotted key pattern"),
+    ],
+)
+def test_invalid_override_exits_with_error(
+    tmp_path: Path, override: str, detail: str
+) -> None:
+    config = tmp_path / "toml-tidy.toml"
+    _ = config.write_text(f"[[overrides]]\n{override}\n", encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{config}: {detail}")
+    assert "Traceback" not in result.output
+
+
+def test_non_array_overrides_exits_with_error(tmp_path: Path) -> None:
+    config = tmp_path / "toml-tidy.toml"
+    _ = config.write_text('overrides = "a"\n', encoding="utf-8")
+    path = tmp_path / "config.toml"
+    _ = path.write_text("a = 1\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, [str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{config}: overrides must be an array of tables")
+
+
 def test_non_table_config_section_exits_with_error(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     _ = pyproject.write_text('[tool]\ntoml-tidy = "alpha"\n', encoding="utf-8")

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 import typer
 from tomlkit.exceptions import TOMLKitError
 
-from toml_tidy.sorter import OrderMode, Scope, sort_toml
+from toml_tidy.sorter import OrderMode, Override, Scope, sort_toml
 
 app = typer.Typer(help="Sort TOML keys while preserving table hierarchy.")
 _MUTUALLY_EXCLUSIVE_OPTIONS: Final = "--in-place and --check cannot be used together"
@@ -39,7 +39,24 @@ _AMBIGUOUS_DIFF_PATH: Final = (
 )
 _LONE_LF: Final = re.compile(r"(?<!\r)\n")
 _CONFIG_KEYS: Final = frozenset(
-    {"order", "scope", "first", "blank-lines", "line-width"}
+    {"blank-lines", "first", "line-width", "order", "overrides", "scope"}
+)
+_OVERRIDE_KEYS: Final = frozenset({"first", "last", "path", "sort"})
+# One segment of an override path: a basic or literal TOML string, or a bare
+# key widened by the glob characters fnmatch reads. A closed bracket class is
+# one token, so a "." inside it never splits the segment; a lone "[" is kept
+# so _unclosed_class can reject it with a clear message.
+_PATH_SEGMENT: Final = re.compile(
+    r"""
+    [ \t]*
+    (
+        "(?:[^"\\\n]|\\.)*"
+        | '[^'\n]*'
+        | (?:\[!?\]?[^\]\n]*\]|[A-Za-z0-9_\-*?!\[])+
+    )
+    [ \t]*
+    """,
+    re.VERBOSE,
 )
 _PYPROJECT: Final = "pyproject.toml"
 # Per directory, the first of these that applies wins (Ruff's order).
@@ -108,6 +125,7 @@ class _Settings(NamedTuple):
     first: tuple[str, ...]
     blank_lines: bool
     line_width: int | None
+    overrides: tuple[Override, ...]
 
 
 def _as_table(value: object) -> dict[str, object]:
@@ -315,8 +333,9 @@ def _resolve_settings(
     if line_width is None:
         line_width = _parse_line_width(section.get("line-width"), config)
     first = _parse_first(section.get("first", []), config)
+    overrides = _parse_overrides(section.get("overrides", []), config)
 
-    return _Settings(order, scope, first, blank_lines, line_width)
+    return _Settings(order, scope, first, blank_lines, line_width, overrides)
 
 
 def _parse_enum[E: StrEnum](
@@ -351,14 +370,122 @@ def _parse_line_width(value: object, config: Path | None) -> int | None:
     raise _ConfigError(message)
 
 
-def _parse_first(value: object, config: Path | None) -> tuple[str, ...]:
+def _parse_first(
+    value: object, config: Path | None, key: str = "first"
+) -> tuple[str, ...]:
     if isinstance(value, list):
         items = cast("list[object]", value)
         first = tuple(item for item in items if isinstance(item, str))
         if len(first) == len(items):
             return first
-    message = f"{config}: first must be a list of strings, got {value!r}"
+    message = f"{config}: {key} must be a list of strings, got {value!r}"
     raise _ConfigError(message)
+
+
+def _parse_overrides(value: object, config: Path | None) -> tuple[Override, ...]:
+    if not isinstance(value, list):
+        message = f"{config}: overrides must be an array of tables, got {value!r}"
+        raise _ConfigError(message)
+    return tuple(
+        _parse_override(entry, config, f"overrides[{index}]")
+        for index, entry in enumerate(cast("list[object]", value))
+    )
+
+
+def _parse_override(value: object, config: Path | None, where: str) -> Override:
+    """Validate one ``[[overrides]]`` entry; every field error is fatal."""
+    if not isinstance(value, dict):
+        message = f"{config}: {where} must be a table, got {value!r}"
+        raise _ConfigError(message)
+    entry = cast("dict[str, object]", value)
+    unknown_keys = sorted(entry.keys() - _OVERRIDE_KEYS)
+    if unknown_keys:
+        rendered = ", ".join(repr(key) for key in unknown_keys)
+        message = f"{config}: {where}: unknown key(s): {rendered}"
+        raise _ConfigError(message)
+    if "path" not in entry:
+        message = f"{config}: {where}: path is required"
+        raise _ConfigError(message)
+    path = _parse_key_pattern(entry["path"], config, where)
+    first = _parse_first(entry.get("first", []), config, f"{where}.first")
+    last = _parse_first(entry.get("last", []), config, f"{where}.last")
+    sort = entry.get("sort", True)
+    if not isinstance(sort, bool):
+        message = f"{config}: {where}.sort must be a boolean, got {sort!r}"
+        raise _ConfigError(message)
+    return Override(path, first, last, sort)
+
+
+def _parse_key_pattern(
+    value: object, config: Path | None, where: str
+) -> tuple[str, ...]:
+    """Split a dotted-key glob into one ``fnmatch`` pattern per segment.
+
+    Quoted segments decode as TOML strings, so they compare against the same
+    logical key a parsed document holds. ``**`` is refused rather than read
+    as ``*``: no pattern may cross a segment boundary.
+    """
+    if not isinstance(value, str):
+        message = f"{config}: {where}.path must be a string, got {value!r}"
+        raise _ConfigError(message)
+    segments = _split_key_pattern(value)
+    if segments is None:
+        message = f"{config}: {where}.path is not a dotted key pattern: {value!r}"
+        raise _ConfigError(message)
+    if any("**" in segment for segment in segments):
+        message = f"{config}: {where}.path does not support '**': {value!r}"
+        raise _ConfigError(message)
+    if any(_unclosed_class(segment) for segment in segments):
+        message = f"{config}: {where}.path has an unclosed '[': {value!r}"
+        raise _ConfigError(message)
+    return segments
+
+
+def _unclosed_class(pattern: str) -> bool:
+    """Return whether a ``[`` in ``pattern`` opens a class with no ``]``.
+
+    This follows ``fnmatch.translate``: a ``!`` and then a ``]`` directly
+    after ``[`` are class members. ``fnmatch`` reads an unclosed ``[`` as a
+    literal and raises nothing, so the override would never match a bare key.
+    """
+    index = 0
+    while index < len(pattern):
+        if pattern[index] != "[":
+            index += 1
+            continue
+        end = index + 1
+        if pattern.startswith("!", end):
+            end += 1
+        if pattern.startswith("]", end):
+            end += 1
+        end = pattern.find("]", end)
+        if end < 0:
+            return True
+        index = end + 1
+    return False
+
+
+def _split_key_pattern(text: str) -> tuple[str, ...] | None:
+    """Return a dotted key's segments, or ``None`` when it is not one."""
+    segments: list[str] = []
+    position = 0
+    while True:
+        match = _PATH_SEGMENT.match(text, position)
+        if match is None:
+            return None
+        raw = match.group(1)
+        if raw[0] in "\"'":
+            try:
+                raw = cast("str", tomllib.loads(f"k = {raw}")["k"])
+            except tomllib.TOMLDecodeError:
+                return None
+        segments.append(raw)
+        position = match.end()
+        if position == len(text):
+            return tuple(segments)
+        if text[position] != ".":
+            return None
+        position += 1
 
 
 def _detect_linesep(content: str) -> str:
@@ -679,6 +806,7 @@ def _process_file(
             settings.first,
             blank_lines=settings.blank_lines,
             line_width=settings.line_width,
+            overrides=settings.overrides,
         )
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
         typer.echo(f"{path}: {error}", err=True)

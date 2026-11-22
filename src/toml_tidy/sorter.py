@@ -2,7 +2,8 @@
 
 import re
 from enum import StrEnum
-from typing import Literal, cast
+from fnmatch import fnmatchcase
+from typing import Literal, NamedTuple, cast
 
 import tomlkit
 from tomlkit.container import Container
@@ -32,6 +33,23 @@ class Scope(StrEnum):
     KEYS = "keys"
 
 
+class Override(NamedTuple):
+    """Ordering rules for the tables whose key path matches ``path``.
+
+    ``path`` holds one ``fnmatch`` pattern per key segment, compared with
+    ``fnmatchcase`` against the parsed logical key path, so ``*`` never
+    crosses a segment boundary. ``first`` and ``last`` pin entries of the
+    matched table by the leading segment of their key path; ``sort=False``
+    keeps the unpinned entries of the matched table's own body in the order
+    their leading key segments first appear.
+    """
+
+    path: tuple[str, ...]
+    first: tuple[str, ...] = ()
+    last: tuple[str, ...] = ()
+    sort: bool = True
+
+
 def sort_toml(  # noqa: PLR0913
     source: str,
     order: OrderMode = OrderMode.NATURAL,
@@ -40,6 +58,7 @@ def sort_toml(  # noqa: PLR0913
     *,
     blank_lines: bool = False,
     line_width: int | None = None,
+    overrides: tuple[Override, ...] = (),
 ) -> str:
     """Return source with direct keys sorted recursively.
 
@@ -59,6 +78,9 @@ def sort_toml(  # noqa: PLR0913
     blank lines to exactly one before every table header and none elsewhere.
     ``line_width`` expands single-line arrays whose rendered line is wider
     than the given column count; ``None`` leaves every array's layout alone.
+    ``overrides`` applies per-table ordering rules; when several match one
+    table, the last one wins as a whole and fields are never merged. No
+    override matches the document root, where ``first`` applies instead.
     """
     # A trailing lone "\r" is invalid TOML; appending "\n" would turn it into
     # a valid CRLF line instead of letting the parser reject it.
@@ -66,7 +88,13 @@ def sort_toml(  # noqa: PLR0913
         source += "\n"
     document = tomlkit.parse(source)
     _sort_document(
-        document, order, scope, first, blank_lines=blank_lines, line_width=line_width
+        document,
+        order,
+        scope,
+        first,
+        blank_lines=blank_lines,
+        line_width=line_width,
+        overrides=overrides,
     )
     return tomlkit.dumps(document)
 
@@ -79,6 +107,7 @@ def _sort_document(  # noqa: PLR0913
     *,
     blank_lines: bool = False,
     line_width: int | None = None,
+    overrides: tuple[Override, ...] = (),
 ) -> None:
     """Sort a container's tree, then restore key-to-index map consistency.
 
@@ -95,7 +124,9 @@ def _sort_document(  # noqa: PLR0913
     Array expansion runs after spacing normalization so the measured width
     is the width the normalized array actually renders at.
     """
-    _sort_container(container, order, scope, first)
+    _sort_container(
+        container, order, scope, Override((), first), overrides=overrides, path=()
+    )
     _normalize_inline_array_whitespace(container)
     if line_width is not None:
         _expand_wide_arrays(container, line_width)
@@ -401,26 +432,52 @@ def _restore_maps(container: Container) -> None:
                 continue
 
 
-def _sort_container(
+def _sort_container(  # noqa: PLR0913
     container: Container,
     order: OrderMode,
     scope: Scope,
-    first: tuple[str, ...],
+    rules: Override,
+    *,
+    overrides: tuple[Override, ...],
+    path: tuple[str, ...],
 ) -> None:
-    """Sort direct key segments and then visit descendant table containers."""
-    container.body[:] = _sort_segments(container.body, order, scope, first)
+    """Sort direct key segments and then visit descendant table containers.
 
-    for _, item in container.body:
-        match item:
-            case Table():
-                _sort_container(item.value, order, scope, ())
-            case AoT():
-                for table in item.body:
-                    _sort_container(table.value, order, scope, ())
-            case _:
-                continue
+    ``rules`` orders this container's own body; each child table at
+    ``(*path, key)`` gets the last override matching that path, or none.
+    """
+    container.body[:] = _sort_segments(container.body, order, scope, rules)
+
+    for key, item in container.body:
+        if key is None or not isinstance(item, Table | AoT):
+            continue
+        child_path = (*path, key.key)
+        child_rules = _match_override(overrides, child_path) or Override(child_path)
+        children = [item] if isinstance(item, Table) else item.body
+        for child in children:
+            _sort_container(
+                child.value,
+                order,
+                scope,
+                child_rules,
+                overrides=overrides,
+                path=child_path,
+            )
 
     container.body[:] = _restore_comment_attachment(container.body)
+
+
+def _match_override(
+    overrides: tuple[Override, ...], path: tuple[str, ...]
+) -> Override | None:
+    """Return the last override whose segment patterns match ``path``."""
+    for override in reversed(overrides):
+        if len(override.path) == len(path) and all(
+            fnmatchcase(segment, pattern)
+            for segment, pattern in zip(path, override.path, strict=True)
+        ):
+            return override
+    return None
 
 
 def _rebuild_map(container: Container) -> None:
@@ -452,7 +509,7 @@ def _sort_segments(
     entries: list[BodyEntry],
     order: OrderMode,
     scope: Scope,
-    first: tuple[str, ...],
+    rules: Override,
 ) -> list[BodyEntry]:
     """Sort direct keys and sibling tables without crossing their boundaries."""
     sorted_entries: list[BodyEntry] = []
@@ -463,7 +520,7 @@ def _sort_segments(
         skip = (kind == "key" and scope is Scope.TABLES) or (
             kind == "table" and scope is Scope.KEYS
         )
-        return segment if skip else _sort_segment(segment, order, first)
+        return segment if skip else _sort_segment(segment, order, rules)
 
     for entry in entries:
         key, item = entry
@@ -497,9 +554,19 @@ def _sort_segments(
 def _sort_segment(
     entries: list[BodyEntry],
     order: OrderMode,
-    first: tuple[str, ...] = (),
+    rules: Override,
 ) -> list[BodyEntry]:
-    """Move leading comments with keys while keeping whitespace after prior keys."""
+    """Move leading comments with keys while keeping whitespace after prior keys.
+
+    ``rules.first`` names rank ahead of unpinned entries and ``rules.last``
+    names behind them. With ``rules.sort`` false, entries order by where
+    their leading key segment first appears in ``entries``, after the
+    parent's merge appended any piece declared above this table's own
+    header. Entries that share a leading segment are pieces of one child
+    table, so they stay adjacent and keep the order sorting gives them:
+    tomlkit reparses separated or reordered pieces into a different shape.
+    Merging and comment hoisting run as they do for a sorted body.
+    """
     entries = _hoist_header_comments(entries)
     leading: list[BodyEntry] = []
     pending: list[BodyEntry] = []
@@ -520,11 +587,18 @@ def _sort_segment(
         groups.append((_key_path(key, item), [*comments, entry]))
 
     groups = _merge_sibling_tables(groups)
-    pin_rank = {name: rank for rank, name in enumerate(first)}
+    unpinned = len(rules.first)
+    pin_rank = {name: unpinned + 1 + rank for rank, name in enumerate(rules.last)}
+    pin_rank.update({name: rank for rank, name in enumerate(rules.first)})
+    appearance: dict[str, int] = {}
+    for path, _ in groups:
+        if path[0] not in appearance:
+            appearance[path[0]] = len(appearance)
     sorted_groups = sorted(
         groups,
         key=lambda group: (
-            pin_rank.get(group[0][0], len(first)),
+            pin_rank.get(group[0][0], unpinned),
+            0 if rules.sort else appearance[group[0][0]],
             _path_sort_key(group[0], order),
         ),
     )

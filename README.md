@@ -81,6 +81,40 @@ line-width = 88     # omit to leave array layout alone
 
 `first` pins top-level entries by name, in the listed order, ahead of their sorted siblings; it never applies inside nested tables, and it has no CLI flag.
 
+`[[overrides]]` sets ordering rules for the tables at one key path, and has no CLI flag:
+
+```toml
+# toml-tidy.toml
+[[overrides]]
+path = "package"              # Cargo.toml
+first = ["name", "version"]
+last = ["description"]
+
+[[overrides]]
+path = "tool.poetry.dependencies"
+first = ["python"]
+
+[[overrides]]
+path = 'plugins."omo-kit"'
+sort = false
+```
+
+In a `pyproject.toml` the same entries are written as `[[tool.toml-tidy.overrides]]`.
+
+- `path` (required) is a dotted key, with quoted segments allowed, compared against each table's parsed key path, so `"omo-kit"` and `omo-kit` match the same table.
+  Each segment is an `fnmatch` pattern: `*` matches within one segment only, a `[...]` class is part of one segment even when it holds a `.`, and `**` is rejected.
+- `first` and `last` pin entries of the matched table, by the leading segment of their key, before and after the sorted rest, in the listed order.
+- A name listed in both `first` and `last` is pinned first.
+- `sort = false` keeps the matched table's unpinned entries in the order their keys first appear; `first` and `last` still apply, and its child tables still sort unless an override matches them too.
+  Child tables declared above the table's own header, such as `[x.z]` before `[x]`, count as appearing after the entries under that header.
+  Pieces of one child table, such as a repeated `[[bin]]` or a `[a.b]` declared apart from `[a.c]`, stay together in the order sorting gives them, because TOML parsers read separated pieces back in a different layout.
+- Dotted keys such as `z.y = 1` sort by their full path with the keys of the table that holds them, so an override for that table orders them and a `path` that names only the dotted prefix (`z`) has no effect on them.
+- Each element of an array of tables matches the array's path.
+- When several overrides match one table, the last one wins as a whole; fields are never merged.
+- Overrides never apply at the document root, where `first` does.
+- `scope` still decides which segment kinds sort inside a matched table.
+- An unknown key, a missing `path`, a value of the wrong type, a path that is not a dotted key, or a path segment with an unclosed `[` class is a configuration error.
+
 Unknown keys are rejected so configuration typos cannot silently fall back to defaults.
 
 Discovery follows [Ruff's rules](https://docs.astral.sh/ruff/configuration/#config-file-discovery):
