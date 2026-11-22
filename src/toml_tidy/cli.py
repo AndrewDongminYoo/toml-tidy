@@ -617,8 +617,26 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
         message = "refusing to rewrite a set-ID file in place"
         raise PermissionError(errno.EPERM, message, str(path))
 
-    with path.open("w", encoding="utf-8", newline="") as handle:
+    # Open without truncating and check the opened file before emptying it,
+    # so the write lands only on the file that was checked.
+    descriptor = os.open(path, os.O_WRONLY)
+    try:
+        _require_same_file(os.fstat(descriptor), target_stat, path)
+        os.ftruncate(descriptor, 0)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with open(descriptor, "w", encoding="utf-8", newline="") as handle:  # noqa: PTH123
         _ = handle.write(content)
+
+
+def _require_same_file(
+    current: os.stat_result, expected: os.stat_result, path: Path
+) -> None:
+    """Refuse to write when ``path`` no longer names the file that was read."""
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        message = "changed while it was being sorted; not written"
+        raise OSError(errno.ESTALE, message, str(path))
 
 
 def _read_acl_xattr(
@@ -659,10 +677,17 @@ def _acl_matches(target: Path, copy: Path) -> bool:
         return False
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Replace a file only after its complete replacement is safely written."""
+def _atomic_write(path: Path, content: str, read_stat: os.stat_result) -> None:
+    """Replace a file only after its complete replacement is safely written.
+
+    ``read_stat`` is the file that was read and sorted. The name is resolved
+    again here, so a file swapped in under it is refused rather than
+    overwritten; the check repeats just before the rename, which leaves only
+    the gap between that check and the rename itself.
+    """
     target = path.resolve(strict=True)
     target_stat = target.stat()
+    _require_same_file(target_stat, read_stat, path)
     if not target_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
         raise PermissionError(13, "Permission denied", str(path))
 
@@ -708,6 +733,9 @@ def _atomic_write(path: Path, content: str) -> None:
             _write_existing(target, content, target_stat)
             return
 
+        # lstat: the rename overwrites this directory entry itself, so a
+        # symlink placed here must not pass by naming the original file.
+        _require_same_file(target.lstat(), target_stat, path)
         _ = temporary_path.replace(target)
         temporary_path = None
     finally:
@@ -781,6 +809,27 @@ def sort_file(
         raise typer.Exit(code=exit_code)
 
 
+def _write_in_place(
+    path: Path,
+    output: str,
+    read_stat: os.stat_result,
+    held: int | None,
+    *,
+    changed: bool,
+) -> int:
+    """Write ``output`` over the file that was read, then release ``held``."""
+    try:
+        if changed:
+            _atomic_write(path, output, read_stat)
+    except OSError as error:
+        _report(f"{path}: {error}")
+        return 2
+    finally:
+        if held is not None:
+            os.close(held)
+    return 0
+
+
 def _process_file(
     path: Path,
     *,
@@ -807,9 +856,15 @@ def _process_file(
             _report(str(error))
             return 2
 
+    held: int | None = None
     try:
         with path.open(encoding="utf-8", newline="") as handle:
+            read_stat = os.fstat(handle.fileno())
             raw_source = handle.read()
+            if in_place:
+                # Kept open until the write ends, so the file's inode number
+                # cannot be reused by another file in the meantime.
+                held = os.dup(handle.fileno())
         linesep = _detect_linesep(raw_source)
         # Mixed endings: parse the raw source unchanged so tomlkit's per-line
         # trivia keeps each line's original ending, mirroring TOMLFile's
@@ -825,6 +880,8 @@ def _process_file(
             overrides=settings.overrides,
         )
     except (TOMLKitError, UnicodeDecodeError, OSError, RecursionError) as error:
+        if held is not None:
+            os.close(held)
         _report(f"{path}: {error}")
         return 2
 
@@ -839,13 +896,9 @@ def _process_file(
         )
 
     if in_place:
-        if source != sorted_source:
-            try:
-                _atomic_write(path, output)
-            except OSError as error:
-                _report(f"{path}: {error}")
-                return 2
-        return 0
+        return _write_in_place(
+            path, output, read_stat, held, changed=source != sorted_source
+        )
 
     # Bytes bypass text-mode newline translation: on Windows a str write would
     # rewrite the already-restored "\r\n" endings to "\r\r\n".
