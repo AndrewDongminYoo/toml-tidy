@@ -108,6 +108,8 @@ A comment trailing the array is excluded from that measurement, because expandin
 Only an array that is the direct value of a key is measured, since only that array occupies a line of its own; arrays nested inside another array or an inline table share their parent's line.
 Expansion never runs in reverse, and an array already spanning several lines is never measured, so a second run over expanded output changes nothing.
 An empty array is never expanded because doing so cannot shorten its line.
+An array also stays on one line when its expanded text would exceed 16 times the length of the line it occupies: every value gains the array's indent, so a deep indent over many short values would otherwise multiply the output, and the bound keeps output linear in the input.
+The decision depends only on the array itself, so a second run makes the same choice.
 
 An expanded array is laid out in the line ending of the line it occupies, taken from the array's own trivia, so a CRLF or mixed-ending document retains its endings.
 

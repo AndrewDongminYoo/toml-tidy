@@ -1102,6 +1102,46 @@ def test_sort_toml_expands_array_wider_than_line_width() -> None:
     assert sort_toml(result, line_width=20) == result
 
 
+def test_sort_toml_leaves_an_array_on_one_line_when_expanding_multiplies_it() -> None:
+    # Each element would repeat the 200-column indent: about 82x the line.
+    source = " " * 200 + "value = [" + ", ".join("1" * 400) + "]\n"
+
+    result = sort_toml(source, line_width=10)
+
+    assert "\n" not in result.rstrip("\n")
+    assert tomllib.loads(result) == tomllib.loads(source)
+    assert sort_toml(result, line_width=10) == result
+
+
+def test_sort_toml_output_stays_linear_in_the_input_under_line_width() -> None:
+    sizes: list[float] = []
+    for scale in (1, 2, 4):
+        source = " " * (100 * scale) + "a = [" + ",".join("1" * (1000 * scale)) + "]\n"
+        sizes.append(len(sort_toml(source, line_width=10)) / len(source))
+
+    assert max(sizes) <= 16
+
+
+@pytest.mark.parametrize("values", range(10, 20))
+def test_sort_toml_never_expands_a_line_past_the_ratio(values: int) -> None:
+    # Around 15 one-digit values under a 1,000-column indent the expanded
+    # array alone stays under 16x the line while line + lead goes over.
+    source = " " * 1000 + "value = [" + ", ".join("1" * values) + "]\n"
+
+    result = sort_toml(source, line_width=10)
+
+    assert len(result) <= 16 * len(source)
+
+
+def test_sort_toml_still_expands_an_ordinary_indented_array() -> None:
+    source = "[t]\n" + " " * 16 + "value = [" + ", ".join("1" * 30) + "]\n"
+
+    result = sort_toml(source, line_width=40)
+
+    assert result.count("\n") == 33
+    assert tomllib.loads(result) == tomllib.loads(source)
+
+
 def test_sort_toml_keeps_array_at_exactly_line_width() -> None:
     source = "value = [ 1, 2 ]\n"
     assert len(source.rstrip("\n")) == 16
