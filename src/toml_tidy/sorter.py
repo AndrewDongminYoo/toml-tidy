@@ -15,6 +15,10 @@ type SortKey = tuple[tuple[int, str | tuple[int, str]], ...]
 
 _NATURAL_PARTS = re.compile(r"(\d+)")
 _VERSION_CHUNKS = re.compile(r"[0-9]+|_| |[^0-9_ ]+")
+# line-width leaves an array on one line when expanding it would make it
+# longer than this many times the line it occupies, so output stays linear
+# in the input. A 16-column indent over one-digit values is about 8x.
+_MAX_EXPANSION_RATIO = 16
 
 
 class OrderMode(StrEnum):
@@ -222,7 +226,12 @@ def _expand_wide_arrays(
     for key, item in container.body:
         match item:
             case Array() as array if key is not None and array:
-                if _rendered_width(prefix, key, array) > line_width:
+                width = _rendered_width(prefix, key, array)
+                if width <= line_width:
+                    continue
+                # The line's lead (indent, key, separator) stays as it is.
+                expanded = width - len(array.as_string()) + _expanded_length(array)
+                if expanded <= _MAX_EXPANSION_RATIO * width:
                     _expand_array(array)
             case Table() if key is not None and key.is_dotted():
                 _expand_wide_arrays(
@@ -264,6 +273,27 @@ def _expand_array(array: Array) -> None:
         )
     )
     _ = array._reindex()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+
+
+def _expanded_length(array: Array) -> int:
+    """Return the length of the text ``_expand_array`` would give ``array``.
+
+    Every value gains a line break, the array's indent plus four spaces, and
+    a comma, so a deep indent over many short values multiplies the array's
+    size. The caller compares this with the line the array occupies now.
+    """
+    newline = 2 if array.trivia.trail.endswith("\r\n") else 1
+    indent = len(array.trivia.indent)
+    items = array._iter_items()  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    values = [item for item in items if not isinstance(item, Whitespace)]
+    per_value = newline + indent + len("    ,")
+    brackets = len("[]")
+    return (
+        brackets
+        + sum(len(value.as_string()) + per_value for value in values)
+        + newline
+        + indent
+    )
 
 
 def _rendered_width(prefix: str, key: Key, array: Array) -> int:
