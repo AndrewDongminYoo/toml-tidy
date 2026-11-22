@@ -145,6 +145,9 @@ A set-user-ID or set-group-ID target is refused on the rewrite-in-place path rat
 
 A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.
 
+Every error is one stderr line: C0 and C1 control characters (TAB, line breaks, ESC, DEL), U+2028, U+2029, and the surrogates an undecodable filename byte arrives as are printed as their Python `repr` escapes (`\t`, `\x1b`, ` `, `\udcff`) wherever they occur in the path or the message.
+Other characters, including format characters such as U+200D used in emoji sequences, are printed as they are.
+
 ## Tests
 
 Unit tests cover alpha, natural, and version ordering (including the Rust style guide's example list), case-insensitive tie behavior, recursive nested-table handling, parsed ordering for quoted and dotted keys including table headers, comments, inline comments, blank lines, arrays of tables, scope-limited sorting, and `first` pinning.
