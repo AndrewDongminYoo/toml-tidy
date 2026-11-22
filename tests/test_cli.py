@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 import toml_tidy.cli
 from toml_tidy.cli import app
+from toml_tidy.sorter import sort_toml
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -404,6 +405,99 @@ def test_in_place_updates_all_hard_links(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert linked_path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert path.stat().st_ino == linked_path.stat().st_ino
+
+
+@pytest.mark.skipif(os.name != "posix", reason="rename over an open file needs POSIX")
+def test_in_place_refuses_a_path_replaced_while_sorting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The name now points at another file than the one that was read.
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+    other = tmp_path / "other.toml"
+    _ = other.write_bytes(b"z = 1\ny = 2\n")
+
+    def sort_then_swap(*args: object, **kwargs: object) -> str:
+        result = sort_toml(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        _ = other.replace(path)
+        return result
+
+    monkeypatch.setattr(toml_tidy.cli, "sort_toml", sort_then_swap)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"{path}: ")
+    assert path.read_bytes() == b"z = 1\ny = 2\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.toml"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="rename over an open file needs POSIX")
+def test_in_place_refuses_a_path_replaced_before_the_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+    other = tmp_path / "other.toml"
+    _ = other.write_bytes(b"z = 1\ny = 2\n")
+    real_fsync = os.fsync
+
+    def swap_then_fsync(descriptor: int) -> None:
+        # The temporary file is synced last, just before the rename.
+        _ = other.replace(path)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", swap_then_fsync)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert path.read_bytes() == b"z = 1\ny = 2\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.toml"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlinks need POSIX here")
+def test_in_place_refuses_a_symlink_placed_before_the_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The link names the original file, but the rename would overwrite the
+    # link itself and leave the moved file unsorted.
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+    moved = tmp_path / "moved.toml"
+    real_fsync = os.fsync
+
+    def relink_then_fsync(descriptor: int) -> None:
+        _ = path.replace(moved)
+        path.symlink_to(moved)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", relink_then_fsync)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 2
+    assert path.is_symlink()
+    assert moved.read_bytes() == b"b = 1\na = 2\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="rename over an open file needs POSIX")
+def test_rewrite_in_place_refuses_a_file_other_than_the_one_checked(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+    checked = path.stat()
+    other = tmp_path / "other.toml"
+    _ = other.write_bytes(b"z = 1\ny = 2\n")
+    _ = other.replace(path)
+
+    with pytest.raises(OSError, match="changed while it was being sorted"):
+        toml_tidy.cli._write_existing(  # pyright: ignore[reportPrivateUsage]
+            path, "a = 2\nb = 1\n", checked
+        )
+
+    assert path.read_bytes() == b"z = 1\ny = 2\n"
 
 
 @pytest.mark.skipif(

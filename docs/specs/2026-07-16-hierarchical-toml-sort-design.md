@@ -141,6 +141,8 @@ A target carrying an access-control list the replacement cannot reproduce joins 
 
 A set-user-ID or set-group-ID target is refused on the rewrite-in-place path rather than rewritten. Writing clears those bits from its first byte, and putting them back is not reliably available: it needs ownership the writer need not have, and for set-group-ID a `chmod` by a caller outside the file's group clears the bit while reporting success, so even asking whether a restore would work destroys what it asks about. The replacement path is unaffected — `shutil.copystat` carries the mode across intact — so an ordinary set-ID file is still sorted in place; only one that also carries a hard link or an ACL, or sits on Windows, is declined.
 
+In-place output writes only to the file that was read. The device and inode of the open source are recorded, and a duplicate of its descriptor stays open until the write ends, so that inode number cannot be reused meanwhile. The path is compared with them after it is resolved again for writing, once more just before the replacement is renamed into place (with `lstat`, because the rename overwrites the directory entry itself, even a symlink), and on the rewrite-in-place path against the opened descriptor before it is truncated. A mismatch exits with code two and leaves both files untouched. The only remaining gap is between the last comparison and the rename itself, because the standard library offers no atomic exchange that also checks identity.
+
 `--in-place` and `--check` are mutually exclusive.
 
 A missing or unreadable path (including a directory) reports `{path}: {message}` with exit code two and does not stop the remaining paths.
