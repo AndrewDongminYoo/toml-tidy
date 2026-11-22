@@ -734,10 +734,12 @@ def _hoist_header_comments(entries: list[BodyEntry]) -> list[BodyEntry]:
     if not table_indexes:
         return entries
 
+    # Built once: rebuilding the slice per entry made this pass quadratic.
+    hoist_after = set(table_indexes[:-1])
     hoisted: list[BodyEntry] = []
     for index, entry in enumerate(entries):
         hoisted.append(entry)
-        if index in table_indexes[:-1]:
+        if index in hoist_after:
             match entry[1]:
                 case Table() as table:
                     hoisted.extend(_pop_trailing_comment_run(table.value))
