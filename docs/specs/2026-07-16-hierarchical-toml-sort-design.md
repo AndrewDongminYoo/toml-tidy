@@ -52,6 +52,7 @@ For example, `[plugins."omo-kit"]` and `[plugins.omo]` compare as `omo-kit` and 
 | `first`       | A tuple of strings naming top-level entries to pin.             |
 | `blank_lines` | A `bool`.                                                       |
 | `line_width`  | `None` or a positive integer, excluding `bool`.                 |
+| `overrides`   | A tuple of `Override` values; the last match for a table wins.  |
 
 The function performs no runtime argument validation and guarantees no particular behavior or exception for values outside these domains.
 Type annotations and static checking help typed callers, but `int | None` cannot enforce positivity or exclude Python's `bool` subclass of `int`.
@@ -67,11 +68,25 @@ The closest file is used alone, with no merging across files.
 When the hierarchy holds no configuration file, the first existing file in the user-level `toml-tidy` directory applies (`$XDG_CONFIG_HOME` when absolute, else `~/.config`; on Windows `%APPDATA%`, else `~\AppData\Roaming`).
 A user-level directory that cannot be located or searched counts as holding no file, so the defaults apply.
 
-Supported keys are `order`, `scope`, `first`, `blank-lines`, and `line-width`; CLI flags override `order`, `scope`, `blank-lines`, and `line-width`, while `first` is configuration-only.
+Supported keys are `order`, `scope`, `first`, `blank-lines`, `line-width`, and `overrides`; CLI flags override `order`, `scope`, `blank-lines`, and `line-width`, while `first` and `overrides` are configuration-only.
 
 `first` lists top-level entry names that are pinned ahead of their sorted siblings in the listed order, matched against the leading segment of the parsed key path, and never applies inside nested tables.
 
 When a segment kind is excluded by `scope`, `first` cannot move entries of that kind because the segment is not reordered at all.
+
+`overrides` is an array of tables with the keys `path` (required string), `first` and `last` (lists of strings), and `sort` (boolean, default true).
+`path` is a dotted key whose quoted segments decode as TOML strings; each segment is an `fnmatch` pattern matched with `fnmatchcase` against the parsed logical key path of a table, so `*` never crosses a segment and `**` is rejected.
+In a bare segment a closed `[...]` class is one token, so a `.` inside it does not split the path.
+Each element of an array of tables matches the array's own path, and no override matches the document root.
+When several overrides match one table, the last matching entry wins as a whole and its fields are never merged with another entry.
+In a matched table, `first` and `last` pin entries by the leading segment of their key path before and after the sorted rest, in both key and table segments, and never apply in child tables.
+A name in both `first` and `last` is pinned first.
+`sort = false` replaces the sort key of the matched table's unpinned entries with the position where their leading key segment first appears in the parsed body; `first` and `last` still apply, and child tables still sort under their own rules.
+The parsed body is the one the parent's sibling-table merge leaves: a piece declared above the table's own header, such as `[x.z]` before `[x]`, is appended after that header's entries, so it counts as appearing after them.
+Entries that share a leading segment are pieces of one child table, so they stay adjacent and keep the order sorting gives them, because tomlkit reads separated or reordered pieces back in a different layout.
+The segment still goes through `_sort_segment`, so sibling-table merging and comment hoisting run exactly as for a sorted table, and with no override the output is byte-identical to a run without this feature.
+Dotted keys sort by their full path in the key segment of the table that holds them, so only an override that matches that table orders them; a `path` naming only the dotted prefix has no effect on them.
+An unknown override key, a missing or non-string `path`, a path that is not a dotted key, a segment with a `[` that opens no closed class (which `fnmatch` would silently read as a literal), `first` or `last` that is not a list of strings, or a non-boolean `sort` is a configuration error.
 
 An unreadable configuration file or an invalid configuration value reports `{config path}: {message}` on stderr and exits with code two.
 
