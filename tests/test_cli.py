@@ -582,6 +582,69 @@ def test_in_place_preserves_extended_attributes(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
+    not hasattr(os, "setxattr"), reason="Linux extended attribute APIs required"
+)
+def test_in_place_keeps_the_inode_when_an_attribute_copy_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # shutil swallows a refused setxattr for any attribute, not only an ACL,
+    # so the replacement is compared attribute by attribute before it is used.
+    set_xattr = cast("Callable[[Path, str, bytes], None]", vars(os)["setxattr"])
+    get_xattr = cast("Callable[[Path, str], bytes]", vars(os)["getxattr"])
+    path = tmp_path / "config.toml"
+    _ = path.write_text("b = 1\na = 2\n", encoding="utf-8")
+    attribute = "user.toml_tidy_test"
+    try:
+        set_xattr(path, attribute, b"preserved")
+    except OSError as error:
+        pytest.skip(f"extended attributes are unsupported: {error}")
+    original_inode = path.stat().st_ino
+    refused: list[str] = []
+
+    def refuse(*args: object, **_kwargs: object) -> None:
+        refused.append(str(args[1]))
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "setxattr", refuse)
+
+    result = CliRunner().invoke(app, [str(path), "--in-place"])
+
+    assert result.exit_code == 0
+    # A labeling host also tries security.selinux, so only membership counts.
+    assert attribute in refused
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
+    assert get_xattr(path, attribute) == b"preserved"
+    assert path.stat().st_ino == original_inode
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [["security.capability"], OSError(errno.EIO, "I/O error")],
+)
+def test_rewrite_in_place_refuses_a_file_that_may_hold_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, listed: list[str] | OSError
+) -> None:
+    # Linux drops file capabilities on the first write, like the set-ID bits;
+    # a list that cannot be read could hold them and is declined too.
+    path = tmp_path / "config.toml"
+    _ = path.write_bytes(b"b = 1\na = 2\n")
+
+    def list_attributes(_target: object, **_kwargs: object) -> list[str]:
+        if isinstance(listed, OSError):
+            raise listed
+        return listed
+
+    monkeypatch.setattr(os, "listxattr", list_attributes, raising=False)
+
+    with pytest.raises(PermissionError, match="file capabilities"):
+        toml_tidy.cli._write_existing(  # pyright: ignore[reportPrivateUsage]
+            path, "a = 2\nb = 1\n", path.stat()
+        )
+
+    assert path.read_bytes() == b"b = 1\na = 2\n"
+
+
+@pytest.mark.skipif(
     sys.platform not in {"linux", "darwin"},
     reason="only Linux and macOS let a plain file take the replacement path",
 )
@@ -614,7 +677,10 @@ def test_in_place_keeps_the_inode_when_the_acl_copy_is_refused(
     granted = _read_acl(path)
     original_inode = path.stat().st_ino
 
-    def refuse(*_args: object, **_kwargs: object) -> None:
+    refused: list[str] = []
+
+    def refuse(*args: object, **_kwargs: object) -> None:
+        refused.append(str(args[1]))
         raise OSError(errno.EPERM, "Operation not permitted")
 
     monkeypatch.setattr(os, "setxattr", refuse)
@@ -622,6 +688,7 @@ def test_in_place_keeps_the_inode_when_the_acl_copy_is_refused(
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 0
+    assert refused
     assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert _read_acl(path) == granted
     assert path.stat().st_ino == original_inode
@@ -642,7 +709,10 @@ def test_in_place_keeps_the_inode_when_the_acl_cannot_be_read(
     granted = _read_acl(path)
     original_inode = path.stat().st_ino
 
-    def refuse(*_args: object, **_kwargs: object) -> bytes:
+    refused: list[str] = []
+
+    def refuse(*args: object, **_kwargs: object) -> bytes:
+        refused.append(str(args[1]))
         raise OSError(errno.EPERM, "Operation not permitted")
 
     monkeypatch.setattr(os, "getxattr", refuse)
@@ -650,6 +720,7 @@ def test_in_place_keeps_the_inode_when_the_acl_cannot_be_read(
     result = CliRunner().invoke(app, [str(path), "--in-place"])
 
     assert result.exit_code == 0
+    assert refused
     assert path.read_text(encoding="utf-8") == "a = 2\nb = 1\n"
     assert _read_acl(path) == granted
     assert path.stat().st_ino == original_inode

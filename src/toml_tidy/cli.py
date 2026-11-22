@@ -71,7 +71,7 @@ _ACL_TYPE_EXTENDED: Final = 0x00000100  # <sys/acl.h>
 # A NULL acl_get_file is both "this file carries none" and "I could not look".
 # Only these two mean the former, and only the former is safe to replace on.
 _ACL_ABSENT_ERRNOS: Final = frozenset({errno.ENOENT, errno.ENOTSUP, errno.EOPNOTSUPP})
-_ACL_XATTR: Final = "system.posix_acl_access"  # where Linux keeps a POSIX ACL
+_CAPABILITY_XATTR: Final = "security.capability"  # Linux file capabilities
 # The same distinction one API over: only these mean the attribute is absent.
 _XATTR_ABSENT_ERRNOS: Final = frozenset(
     {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}
@@ -83,7 +83,7 @@ def _load_acl_probe() -> "Callable[[Path], bool]":
 
     Linux needs none up front: ``shutil.copystat`` copies extended attributes
     there, which is where a POSIX ACL lives, so the replacement normally keeps
-    it — and :func:`_acl_matches` confirms afterwards that it did. macOS
+    it — and :func:`_attributes_match` confirms afterwards that it did. macOS
     exposes its ACLs through ``acl_get_file`` alone, which the standard
     library does not wrap, so the check is bound through ``ctypes``.
 
@@ -622,12 +622,25 @@ def _write_existing(path: Path, content: str, target_stat: os.stat_result) -> No
     descriptor = os.open(path, os.O_WRONLY)
     try:
         _require_same_file(os.fstat(descriptor), target_stat, path)
+        _refuse_file_capabilities(descriptor, path)
         os.ftruncate(descriptor, 0)
     except BaseException:
         os.close(descriptor)
         raise
     with open(descriptor, "w", encoding="utf-8", newline="") as handle:  # noqa: PTH123
         _ = handle.write(content)
+
+
+def _refuse_file_capabilities(descriptor: int, path: Path) -> None:
+    """Refuse a file that may carry Linux file capabilities.
+
+    The kernel drops them on the first write, like the set-ID bits, so such a
+    file is declined for the same reason. Asked of the checked descriptor
+    rather than the name, so the answer is about the file to be truncated.
+    """
+    if _may_have_attribute(descriptor, _CAPABILITY_XATTR):
+        message = "refusing to rewrite a file with file capabilities in place"
+        raise PermissionError(errno.EPERM, message, str(path))
 
 
 def _require_same_file(
@@ -639,42 +652,65 @@ def _require_same_file(
         raise OSError(errno.ESTALE, message, str(path))
 
 
-def _read_acl_xattr(
-    path: Path, getxattr: "Callable[[Path, str], bytes]"
-) -> bytes | None:
-    """Return the file's POSIX ACL, or ``None`` when it demonstrably has none.
+def _read_attributes(
+    path: Path,
+    listxattr: "Callable[[Path], list[str]]",
+    getxattr: "Callable[[Path, str], bytes]",
+) -> dict[str, bytes]:
+    """Return every extended attribute of ``path`` by name.
 
-    Raises when the answer could not be obtained, which is not the same thing
-    as an absence and must not be recorded as one.
+    A filesystem without extended attributes yields none. Raises when the
+    answer could not be obtained, which is not the same thing as an absence
+    and must not be recorded as one.
     """
     try:
-        return getxattr(path, _ACL_XATTR)
+        names = listxattr(path)
     except OSError as error:
         if error.errno in _XATTR_ABSENT_ERRNOS:
-            return None
+            return {}
         raise
+    return {name: getxattr(path, name) for name in names}
 
 
-def _acl_matches(target: Path, copy: Path) -> bool:
-    """Say whether the replacement carries exactly the target's ACL.
+def _attributes_match(target: Path, copy: Path) -> bool:
+    """Say whether the replacement carries exactly the target's attributes.
 
     Both directions matter. ``shutil.copystat`` swallows a refused
-    ``setxattr``, so it can report success having carried nothing — and the
-    temporary file is created in the target's own directory, so a default ACL
-    there is inherited onto a replacement whose target had none, handing the
-    file an access rule it never carried. Either way the inode is kept
-    instead.
+    ``setxattr``, so it can report success having carried nothing: an ACL, a
+    security label, an integrity or capability attribute. And the temporary
+    file is created in the target's own directory, so a default ACL there is
+    inherited onto a replacement whose target had none, handing the file an
+    access rule it never carried. Either way the inode is kept instead.
     """
+    listxattr = cast("Callable[[Path], list[str]] | None", vars(os).get("listxattr"))
     getxattr = cast("Callable[[Path, str], bytes] | None", vars(os).get("getxattr"))
-    if getxattr is None:
+    if listxattr is None or getxattr is None:
         # Only macOS reaches here without the attribute API, and its own probe
         # already found the target ACL-free, so the copy is the open question.
         # Anywhere else, no API means no way to tell, which is not a yes.
         return sys.platform == "darwin" and not _HAS_ACL(copy)
     try:
-        return _read_acl_xattr(target, getxattr) == _read_acl_xattr(copy, getxattr)
+        return _read_attributes(target, listxattr, getxattr) == _read_attributes(
+            copy, listxattr, getxattr
+        )
     except OSError:
         return False
+
+
+def _may_have_attribute(descriptor: int, name: str) -> bool:
+    """Say whether the open file may carry attribute ``name``.
+
+    An unreadable list counts as a yes; a filesystem without extended
+    attributes counts as a no. Where the standard library has no
+    ``listxattr`` (macOS), the answer is no.
+    """
+    listxattr = cast("Callable[[int], list[str]] | None", vars(os).get("listxattr"))
+    if listxattr is None:
+        return False
+    try:
+        return name in listxattr(descriptor)
+    except OSError as error:
+        return error.errno not in _XATTR_ABSENT_ERRNOS
 
 
 def _atomic_write(path: Path, content: str, read_stat: os.stat_result) -> None:
@@ -721,7 +757,7 @@ def _atomic_write(path: Path, content: str, read_stat: os.stat_result) -> None:
                         return
 
                 shutil.copystat(target, temporary_path)
-                if not _acl_matches(target, temporary_path):
+                if not _attributes_match(target, temporary_path):
                     _write_existing(target, content, target_stat)
                     return
 

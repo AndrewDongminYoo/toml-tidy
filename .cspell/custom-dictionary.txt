@@ -17,6 +17,7 @@ getfacl
 getxattr
 keepends
 libc
+listxattr
 lockfiles
 minversion
 nomo
