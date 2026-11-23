@@ -44,7 +44,7 @@ lint:
     - git-diff-check
     - grype@0.122.1
     - isort@9.0.2
-    - markdownlint@0.50.0
+    - markdownlint@0.50.1
     - osv-scanner@2.7.1
     - oxipng@10.2.1
     - pinact@4.1.1!
