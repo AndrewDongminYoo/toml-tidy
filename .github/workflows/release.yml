@@ -52,7 +52,7 @@ jobs:
 
       # An exact uv, like the exact uv_build in pyproject.toml, so the same
       # tag builds the same artifacts whenever the release runs.
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: 0.13.9
 
@@ -127,7 +127,7 @@ jobs:
       # Required for PyPI trusted publishing (OIDC).
       id-token: write
     steps:
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: 0.13.9
 
